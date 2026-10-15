@@ -30,7 +30,7 @@ Living document for the core systems. Sections marked *TBD* get filled in as eac
 | Classes | **Real spells, cast by an automatic rotation**; real talent effects (Phase 4). |
 | Travel | **Takes minutes**: running, flight paths, boats/zeppelins, riding (Phase 4). |
 | Quest objectives | Kills and drops play out in fights; **everything else becomes a timed task** (Phase 4). |
-| Healing | **Food heals; nothing else does between fights.** Natural regeneration is 1 HP per minute, so fishing and cooking are what keep a fighter going (Phase 4). |
+| Healing | **Food heals; nothing else does between fights.** Natural regeneration is 1 HP per minute, so fishing and cooking are what keep a fighter going; Apprentice Cooking, Fishing and First Aid are free from level 1 (Phase 4). |
 | Professions | **Two primary professions** at a time (vanilla rule), unlearnable; secondary skills are free (Phase 4c). |
 
 ## Client data (Phase 0 recon, build 5875 enUS)

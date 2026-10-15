@@ -440,6 +440,13 @@ describe('professions and commands', () => {
     expect(s.skills.cooking.level).toBeGreaterThan(1);
   });
 
+  it('Apprentice Cooking, Fishing and First Aid are free from level 1; primaries keep their price', () => {
+    const s = fresh();
+    expect(s.gold).toBe(0);
+    for (const p of ['cooking', 'fishing', 'firstaid'] as const) expect(train(s, data, p).ok).toBe(true);
+    expect(train(s, data, 'mining')).toEqual({ ok: false, error: 'Costs 10c.' });
+  });
+
   it('only two primary professions at a time; unlearning frees a slot', () => {
     const s = fresh();
     s.gold = 1000;

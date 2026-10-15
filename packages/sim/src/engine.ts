@@ -1,7 +1,7 @@
 // The idle engine. `advance` resolves everything that happens between state.now and a target time,
 // one discrete event at a time, using only the RNG stored in the state: same state + same target
 // time = same result, which is what lets the server simulate and clients replay.
-import type { CreatureDef, GameData, ItemDef, RecipeDef } from './data.js';
+import type { CreatureDef, GameData, ItemDef, RecipeDef, SkillRank } from './data.js';
 import { factionOfRace } from './data.js';
 import { discoverTaxis, planTravel, RIDING } from './travel.js';
 import {
@@ -728,6 +728,14 @@ export function stopAction(s: GameState): CommandResult {
   return ok;
 }
 
+/**
+ * What a rank costs. Apprentice Cooking, Fishing and First Aid are free from level 1: food is the only
+ * healing between fights, so a new character has to be able to make its own from the start.
+ */
+export function rankTerms(skill: Profession, rank: SkillRank, currentMax: number): { reqLevel: number; cost: number } {
+  return !currentMax && !PRIMARY_PROFESSIONS.includes(skill) ? { reqLevel: 1, cost: 0 } : { reqLevel: rank.reqLevel, cost: rank.cost };
+}
+
 export function train(s: GameState, data: GameData, skill: Profession): CommandResult {
   const ranks = data.skillRanks[skill];
   const sk = s.skills[skill];
@@ -737,9 +745,10 @@ export function train(s: GameState, data: GameData, skill: Profession): CommandR
     return fail(`You already know ${MAX_PRIMARY} primary professions. Unlearn one first.`);
   }
   if (sk.max && sk.level < sk.max - 25) return fail(`Requires ${SKILL_NAME[skill]} ${sk.max - 25} to train ${next.name}.`);
-  if (s.char.level < next.reqLevel) return fail(`Requires level ${next.reqLevel}.`);
-  if (s.gold < next.cost) return fail(`Costs ${formatMoney(next.cost)}.`);
-  s.gold -= next.cost;
+  const { reqLevel, cost } = rankTerms(skill, next, sk.max);
+  if (s.char.level < reqLevel) return fail(`Requires level ${reqLevel}.`);
+  if (s.gold < cost) return fail(`Costs ${formatMoney(cost)}.`);
+  s.gold -= cost;
   sk.max = next.max;
   if (!sk.level) sk.level = 1;
   for (const r of Object.values(data.recipes)) {

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   canFish, canGather, equipSlots, factionOfRace, fishingCatchChance, gatherColor, killXp, MAX_PRIMARY,
-  playerStats, PRIMARY_PROFESSIONS, REP_RANKS, PROFESSIONS, SKILL_NAME, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
+  playerStats, PRIMARY_PROFESSIONS, rankTerms, REP_RANKS, PROFESSIONS, SKILL_NAME, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
 } from '@idle/sim';
 import { game } from './game.js';
 import { Diorama, type Activity } from './diorama.js';
@@ -226,6 +226,7 @@ export function FishingPage({ s, data }: P) {
 export function SkillHeader({ s, data, skill }: P & { skill: Profession }) {
   const sk = s.skills[skill];
   const next = data.skillRanks[skill].find(r => r.max > sk.max);
+  const terms = next && rankTerms(skill, next, sk.max);
   return (
     <div className="panel">
       <div className="panel-head" style={{ marginBottom: 8 }}>
@@ -233,7 +234,7 @@ export function SkillHeader({ s, data, skill }: P & { skill: Profession }) {
         <div><h2>{SKILL_NAME[skill]}</h2><div className="muted">{sk.max ? `${rankName(data, skill, sk.max)} · ${sk.level} / ${sk.max}` : 'Not trained'}{PRIMARY_PROFESSIONS.includes(skill) ? ' · primary' : ' · secondary'}</div></div>
         <span className="spacer" />
         {next && <button className="btn secondary" onClick={() => game.command({ name: 'train', skill })}>
-          Train {next.name} {next.cost ? <Money copper={next.cost} /> : ''}{next.reqLevel > s.char.level ? ` (level ${next.reqLevel})` : ''}</button>}
+          Train {next.name} {terms!.cost ? <Money copper={terms!.cost} /> : '(free)'}{terms!.reqLevel > s.char.level ? ` (level ${terms!.reqLevel})` : ''}</button>}
       </div>
       {sk.max > 0 && <Bar kind="xp" value={sk.level} max={sk.max} label={`${sk.level} / ${sk.max}`} />}
     </div>
@@ -376,7 +377,7 @@ export function TownPage({ s, data }: P) {
                 <div className="row"><Icon name={SKILL_ICON[skill]} /><div><div className="title">{SKILL_NAME[skill]}</div>
                   <div className="meta">{sk.max ? `${sk.level} / ${sk.max}` : 'Not trained'}{PRIMARY_PROFESSIONS.includes(skill) ? '' : ' · secondary'}</div></div></div>
                 {next ? <button className="btn secondary" onClick={() => game.command({ name: 'train', skill })}>
-                  {next.name} ({next.max}) {next.cost ? <Money copper={next.cost} /> : 'free'}{next.reqLevel > s.char.level ? ` · lvl ${next.reqLevel}` : ''}</button>
+                  {next.name} ({next.max}) {rankTerms(skill, next, sk.max).cost ? <Money copper={rankTerms(skill, next, sk.max).cost} /> : 'free'}{rankTerms(skill, next, sk.max).reqLevel > s.char.level ? ` · lvl ${rankTerms(skill, next, sk.max).reqLevel}` : ''}</button>
                   : <span className="muted">Max rank</span>}
                 {sk.max > 0 && <button className="btn secondary small" onClick={() => confirm(`Unlearn ${SKILL_NAME[skill]}? Your skill and recipes are lost.`) && game.command({ name: 'unlearn', skill })}>Unlearn</button>}
               </div>
