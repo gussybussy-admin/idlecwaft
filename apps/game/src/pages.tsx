@@ -7,6 +7,7 @@ import {
 import { game } from './game.js';
 import { Diorama, type Activity } from './diorama.js';
 import { topDrops } from './loot-preview.js';
+import { PowerBar } from './spells.js';
 import { Bar, colorClass, fmtTime, Icon, ItemIcon, ItemTooltip, Money, withTip } from './ui.js';
 
 type P = { s: GameState; data: GameData };
@@ -81,8 +82,8 @@ function CombatScene({ s, data }: P) {
     const d = new Diorama(host.current!);
     dio.current = d;
     const off = game.onEvent((e: SimEvent) => {
-      const float = (who: 'player' | 'mob', text: string, cls: string) => {
-        const p = d.screenPos(who === 'player' ? 'mob' : 'player'); // damage shows over the one hit
+      const float = (who: 'player' | 'mob', text: string, cls: string, over?: 'player' | 'mob') => {
+        const p = d.screenPos(over ?? (who === 'player' ? 'mob' : 'player')); // damage shows over the one hit
         const f = { id: ++fid.current, x: p.x + (Math.random() - 0.5) * 30, y: p.y, text, cls };
         setFloaters(fs => [...fs.slice(-12), f]);
         setTimeout(() => setFloaters(fs => fs.filter(x => x.id !== f.id)), 1100);
@@ -91,10 +92,11 @@ function CombatScene({ s, data }: P) {
         case 'swing': {
           d.attack(e.who);
           const target = e.who === 'player' ? 'mob' : 'player';
-          if (e.result === 'hit' || e.result === 'crit') { d.wound(target, e.result === 'crit'); float(e.who, String(e.dmg), `${e.who} ${e.result === 'crit' ? 'crit' : ''}`); }
+          if (e.result === 'hit' || e.result === 'crit') { d.wound(target, e.result === 'crit'); float(e.who, e.spell ? `${data.spells[e.spell]?.name ?? ''} ${e.dmg}` : String(e.dmg), `${e.who} ${e.result === 'crit' ? 'crit' : ''} ${e.spell ? 'spell' : ''}`); }
           else { if (e.result === 'dodge') d.dodge(target); float(e.who, e.result === 'miss' ? 'Miss' : 'Dodge', 'miss'); }
           break;
         }
+        case 'heal': float('player', `+${e.amount}`, 'heal', 'player'); break;
         case 'spawn': d.setMob(data.creatures[e.mob.id]?.displayIds ?? null, Math.floor(e.t / 1000)); break;
         case 'kill': d.die('mob'); break;
         case 'death': d.die('player'); d.setActivity('dead'); break;
@@ -131,6 +133,7 @@ function CombatScene({ s, data }: P) {
         <div className="unitframe">
           <div className="uname"><span>{s.char.name}</span><span className="muted">{s.char.level}</span></div>
           <Bar kind="hp" value={s.char.hp} max={st.maxHp} label={`${Math.floor(s.char.hp)} / ${st.maxHp}`} />
+          <PowerBar s={s} data={data} thin />
         </div>
         {mob && def && (
           <div className="unitframe">
@@ -337,6 +340,11 @@ export function CharacterPage({ s, data }: P) {
           <span className="k">Speed</span><span className="v">{(st.speedMs / 1000).toFixed(2)}</span>
           <span className="k">Crit</span><span className="v">{st.crit.toFixed(1)}%</span>
           <span className="k">Dodge</span><span className="v">{st.dodge.toFixed(1)}%</span>
+          {st.maxMana > 0 && <><span className="k">Mana</span><span className="v">{st.maxMana}</span>
+            <span className="k">Spell crit</span><span className="v">{st.spellCrit.toFixed(1)}%</span></>}
+          <span className="k" style={{ gridColumn: '1 / -1', marginTop: 8, color: 'var(--gold)' }}>Weapon skills</span>
+          {Object.entries(s.combatSkills).map(([id, v]) => <span key={id} style={{ display: 'contents' }}>
+            <span className="k">{data.skillNames?.[+id] ?? `Skill ${id}`}</span><span className="v">{v} / {s.char.level * 5}</span></span>)}
         </div>
       </div>
       <BagsPanel s={s} data={data} />

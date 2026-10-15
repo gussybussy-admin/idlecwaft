@@ -5,5 +5,8 @@ export * from './formulas.js';
 export * from './state.js';
 export * from './engine.js';
 export * from './travel.js';
+export * from './spells.js';
+export * from './combat.js';
+export * from './talents.js';
 export * from './commands.js';
 export * from './protocol.js';

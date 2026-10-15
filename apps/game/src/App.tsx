@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { playerStats, type GameData, type GameState, type Profession, type Summary } from '@idle/sim';
+import { playerStats, pointsSpent, talentPoints, trainableSpells, type GameData, type GameState, type Profession, type Summary } from '@idle/sim';
 import { game } from './game.js';
 import { GuildPage } from './guild.js';
 import { TravelPage } from './travel.js';
+import { PowerBar, SpellbookPage, TalentsPage } from './spells.js';
 import { BagsPanel, CharacterPage, CombatPage, CookingPage, FishingPage, GatherPage, LogPage, SKILL_ICON, TownPage } from './pages.js';
-import { Bar, fmtTime, Icon, ItemIcon, Money, TooltipHost } from './ui.js';
+import { Bar, fmtTime, hideTip, Icon, ItemIcon, Money, TooltipHost } from './ui.js';
 import { randomLook, type Look } from './character.js';
 import { Diorama } from './diorama.js';
 
@@ -17,14 +18,14 @@ function CharacterPreview({ look }: { look: Look }) {
   return <div className="diorama" ref={host} style={{ height: 260, marginTop: 10 }} />;
 }
 
-type Page = 'combat' | Profession | 'character' | 'bags' | 'town' | 'travel' | 'guild' | 'log';
+type Page = 'combat' | Profession | 'character' | 'spells' | 'talents' | 'bags' | 'town' | 'travel' | 'guild' | 'log';
 
 export function App() {
   useSyncExternalStore(game.subscribe, game.getVersion);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState<Page>(() => { try { return (localStorage.getItem('idlecwaft.page') as Page) || 'combat'; } catch { return 'combat'; } });
   useEffect(() => { game.start().catch(e => setError(String(e.message ?? e))); return () => game.dispose(); }, []);
-  useEffect(() => { try { localStorage.setItem('idlecwaft.page', page); } catch { /* ignore */ } }, [page]);
+  useEffect(() => { hideTip(); try { localStorage.setItem('idlecwaft.page', page); } catch { /* ignore */ } }, [page]);
 
   if (error) return <div className="create"><h2>Can't start</h2><p className="muted">{error}</p><button className="btn" onClick={() => game.logout()}>Back to login</button></div>;
   if (game.phase === 'login') return <><Login /><Toast /></>;
@@ -47,6 +48,8 @@ export function App() {
         {page === 'town' && <TownPage s={s} data={data} />}
         {page === 'log' && <LogPage s={s} data={data} />}
         {page === 'travel' && <TravelPage s={s} data={data} />}
+        {page === 'spells' && <SpellbookPage s={s} data={data} />}
+        {page === 'talents' && <TalentsPage s={s} data={data} />}
       </div></main>
       {game.away && <AwayReport sum={game.away} data={data} />}
       <Toast />
@@ -101,6 +104,7 @@ function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; pag
       <Icon name={icon} size="sm" /> {label} {right !== undefined && <span className="lvl">{right}</span>}
     </button>
   );
+  const newSpells = trainableSpells(s, data).length, freePoints = talentPoints(s.char.level) - pointsSpent(s);
   const skill = (p: Profession) => item(p, SKILL_ICON[p], p[0].toUpperCase() + p.slice(1), s.skills[p].max ? `${s.skills[p].level}/${s.skills[p].max}` : '—');
   return (
     <aside className="sidebar">
@@ -108,6 +112,7 @@ function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; pag
         <div className="name">{s.char.name}</div>
         <div className="sub">Level {s.char.level} {cls} · {data.zones.find(z => z.id === s.zone)?.name}</div>
         <Bar kind="hp" value={s.char.hp} max={st.maxHp} label={`${Math.floor(s.char.hp)} / ${st.maxHp}`} />
+        <PowerBar s={s} data={data} />
         {s.char.level < data.maxLevel && <Bar kind="xp" value={s.char.xp} max={toNext} label={`${s.char.xp} / ${toNext} XP`} />}
         <Money copper={s.gold} />
         <ActivityLine s={s} data={data} />
@@ -127,6 +132,8 @@ function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; pag
         {skill('cooking')}
         <div className="group">Character</div>
         {item('character', 'INV_Chest_Chain', 'Equipment')}
+        {item('spells', 'INV_Misc_Book_09', 'Spellbook', newSpells ? `${newSpells} new` : undefined)}
+        {item('talents', 'Ability_Marksmanship', 'Talents', freePoints > 0 ? String(freePoints) : undefined)}
         {item('bags', 'INV_Misc_Bag_08', 'Bags', String(Object.keys(s.inventory).length))}
         {item('travel', 'INV_Misc_Map_01', 'Travel')}
         {item('town', 'INV_Misc_Bag_10', 'Trainers & Vendors')}
@@ -184,7 +191,7 @@ function CreateCharacter({ data }: { data: GameData }) {
   return (
     <div className="create">
       <h1 style={{ fontSize: 40 }}>World of Idlecraft</h1>
-      <p className="muted" style={{ margin: 0 }}>Create your character. Elwynn Forest awaits; the rest of Azeroth comes later.</p>
+      <p className="muted" style={{ margin: 0 }}>Create your character. Your race's starting zone awaits.</p>
       <div className="panel">
         <h3>Race</h3>
         {(['alliance', 'horde'] as const).map(side => (<div key={side}><div className="faint" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: 8 }}>{side}</div><div className="choices" style={{ marginTop: 4 }}>{data.races.filter(r => r.faction === side).map(r => (
@@ -192,7 +199,7 @@ function CreateCharacter({ data }: { data: GameData }) {
         <h3 style={{ marginTop: 16 }}>Class</h3>
         <div className="choices" style={{ marginTop: 8 }}>{classes.map(c => (
           <button key={c.id} className={`choice ${cls === c.id ? 'on' : ''}`} onClick={() => setCls(c.id)}>{c.name}</button>))}</div>
-        <p className="faint" style={{ fontSize: 12 }}>Every class fights with weapon attacks for now; class spells and talents arrive in a later phase.</p>
+        <p className="faint" style={{ fontSize: 12 }}>Your class's real spells are cast automatically in fights; talents start at level 10.</p>
         <h3 style={{ marginTop: 16 }}>Appearance</h3>
         <div className="choices" style={{ marginTop: 8 }}>
           <button className={`choice ${sex === 0 ? 'on' : ''}`} onClick={() => setSex(0)}>Male</button>
@@ -204,7 +211,7 @@ function CreateCharacter({ data }: { data: GameData }) {
         <input className="text" style={{ marginTop: 8 }} maxLength={12} value={name} onChange={e => setName(e.target.value)} placeholder="2-12 letters" />
         <div className="btn-row" style={{ marginTop: 16 }}>
           <button className="btn" disabled={!valid} onClick={() => game.createCharacter(name, race, cls,
-            look ? { sex: look.sex, skin: look.skin, face: look.face, hairStyle: look.hairStyle, hairColor: look.hairColor, facialHair: look.facialHair } : undefined)}>Enter Elwynn Forest</button>
+            look ? { sex: look.sex, skin: look.skin, face: look.face, hairStyle: look.hairStyle, hairColor: look.hairColor, facialHair: look.facialHair } : undefined)}>Enter the world</button>
         </div>
       </div>
     </div>

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, planTravel, playerStats,
-  rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, type GameState, type SimEvent,
+  rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, trainSpells, knownSpells,
+  learnTalent, pointsSpent, modded, activeTalentEffects, resetTalents, resetCost,
+  type GameState, type SimEvent,
 } from '../src/index.js';
 import { fixture } from './fixture.js';
 
@@ -94,6 +96,149 @@ describe('travel, flight paths and factions', () => {
     let withQuest = 0;
     for (let i = 0; i < 500; i++) withQuest += rollLoot(data, 'creature:100', rng, new Set([7])).get(7) ?? 0;
     expect(withQuest).toBeGreaterThan(150);
+  });
+});
+
+describe('weapon skills and defense', () => {
+  it('raises the skill of the weapon in hand and Defense while fighting, capped at 5 x level', () => {
+    const s = fresh();
+    s.inventory[5] = 300;
+    s.char.level = 2;
+    s.inventory[12] = 1;
+    expect(equip(s, data, 12).ok).toBe(true);
+    expect(s.combatSkills[43]).toBe(1); // a new weapon type starts at 1
+    startAction(s, data, { kind: 'fight', creature: 100 });
+    advance(s, data, T0 + 20 * 60_000);
+    const cap = s.char.level * 5;
+    expect(s.combatSkills[43]).toBeGreaterThan(5);
+    expect(s.combatSkills[43]).toBeLessThanOrEqual(cap);
+    expect(s.combatSkills[95]).toBeGreaterThan(1);
+    expect(s.combatSkills[162]).toBe(1); // unarmed didn't move while a sword was in hand
+  });
+
+  it('only lets a class equip weapons it can learn', () => {
+    const s = fresh();
+    s.inventory[13] = 1;
+    expect(equip(s, data, 13)).toEqual({ ok: false, error: "Fighters can't use Axes." });
+  });
+});
+
+describe('class spells', () => {
+  const mage = (seed = 5) => newGame(data, { name: 'Zap', race: 1, cls: 8, seed, now: T0 });
+
+  it('starts with its free level-1 spells and full mana', () => {
+    const s = mage();
+    expect(s.spells.sort()).toEqual([911, 912, 913]);
+    expect(s.char.mana).toBeGreaterThan(100);
+  });
+
+  it('a caster fights with its spells: nukes, keeps its damage-over-time up, heals when low, and spends mana', () => {
+    const s = mage();
+    s.inventory[5] = 300;
+    const spellsUsed = new Set<number>(), heals: number[] = [];
+    startAction(s, data, { kind: 'fight', creature: 100 });
+    advance(s, data, T0 + 30 * 60_000, e => {
+      if (e.type === 'swing' && e.who === 'player' && e.spell) spellsUsed.add(e.spell);
+      if (e.type === 'heal') heals.push(e.spell);
+    });
+    expect(spellsUsed.has(911)).toBe(true);
+    expect(spellsUsed.has(912)).toBe(true);
+    expect(s.stats.kills[100]).toBeGreaterThan(10);
+  });
+
+  it('spells make a caster far stronger than auto-attacks alone', () => {
+    const withSpells = mage(), without = mage();
+    without.spells = [];
+    for (const s of [withSpells, without]) { s.inventory[5] = 300; startAction(s, data, { kind: 'fight', creature: 100 }); advance(s, data, T0 + 30 * 60_000); }
+    expect(withSpells.stats.kills[100]).toBeGreaterThan(1.5 * (without.stats.kills[100] ?? 0));
+  });
+
+  it('a fighter builds rage from swings and spends it on its next-swing strike', () => {
+    const s = fresh();
+    s.inventory[5] = 300;
+    let strikes = 0, peakRage = 0;
+    startAction(s, data, { kind: 'fight', creature: 100 });
+    advance(s, data, T0 + 15 * 60_000, e => {
+      if (e.type === 'swing' && e.spell === 901) strikes++;
+      peakRage = Math.max(peakRage, s.char.rage ?? 0);
+    });
+    expect(peakRage).toBeGreaterThan(150);
+    expect(strikes).toBeGreaterThan(0);
+  });
+
+  it('trains new ranks only at a class trainer, by level, while the money lasts', () => {
+    const s = mage();
+    s.zone = 2;
+    expect(trainSpells(s, data)).toEqual({ ok: false, error: "There's no testmage trainer here." });
+    s.zone = 1;
+    expect(trainSpells(s, data)).toEqual({ ok: false, error: 'You have nothing new to learn yet.' });
+    s.char.level = 6;
+    expect(trainSpells(s, data)).toEqual({ ok: false, error: 'Training costs 1s.' });
+    s.gold = 150;
+    expect(trainSpells(s, data).ok).toBe(true);
+    expect(s.spells).toContain(914);
+    expect(s.gold).toBe(50);
+    expect(knownSpells(s, data).find(sp => sp.chain === 911)?.rank).toBe('Rank 2'); // highest rank is used
+  });
+
+  it('known buffs are always on: the shout raises attack power once learned', () => {
+    const s = fresh();
+    const before = playerStats(s, data).ap;
+    s.spells.push(902);
+    expect(playerStats(s, data).ap).toBe(before + 20);
+  });
+
+  it('casters are chunk-independent too (mana ticks, casts and damage-over-time)', () => {
+    const big = mage(9), small = mage(9);
+    for (const s of [big, small]) { s.inventory[5] = 300; startAction(s, data, { kind: 'fight', creature: 100 }); }
+    advance(big, data, T0 + 3_600_000);
+    for (let t = T0; t < T0 + 3_600_000; t += 913) advance(small, data, t);
+    advance(small, data, T0 + 3_600_000);
+    expect(small).toEqual(big);
+  });
+});
+
+describe('talents', () => {
+  const mage = () => newGame(data, { name: 'Zap', race: 1, cls: 8, seed: 5, now: T0 });
+
+  it('follows the vanilla rules: a point per level from 10, rows need 5 points, prerequisites', () => {
+    const s = mage();
+    expect(learnTalent(s, data, 1003)).toEqual({ ok: false, error: 'Talents start at level 10.' });
+    s.char.level = 15; // 6 points
+    expect(learnTalent(s, data, 1002)).toEqual({ ok: false, error: 'Requires 5 points in Testfire.' });
+    for (let i = 0; i < 3; i++) expect(learnTalent(s, data, 1003).ok).toBe(true);
+    expect(learnTalent(s, data, 1003)).toEqual({ ok: false, error: 'Already at the highest rank.' });
+    expect(learnTalent(s, data, 1001).ok).toBe(true);
+    expect(learnTalent(s, data, 1002)).toEqual({ ok: false, error: 'Requires 5 points in Testfire.' });
+    expect(learnTalent(s, data, 1001).ok).toBe(true); // 5 points in the tree, prerequisite at rank 2
+    expect(learnTalent(s, data, 1002).ok).toBe(true);
+    expect(learnTalent(s, data, 1003)).toEqual({ ok: false, error: 'Already at the highest rank.' });
+    expect(pointsSpent(s)).toBe(6);
+  });
+
+  it("applies real effects: health %, a spell's cast time, school damage", () => {
+    const s = mage();
+    s.char.level = 15;
+    const hp = playerStats(s, data).maxHp;
+    for (let i = 0; i < 3; i++) learnTalent(s, data, 1003);
+    expect(playerStats(s, data).maxHp).toBe(Math.round(hp * 1.15));
+    learnTalent(s, data, 1001); learnTalent(s, data, 1001);
+    const bolt = data.spells[911];
+    expect(modded(bolt, activeTalentEffects(s, data)).castMs).toBe(1000);
+    learnTalent(s, data, 1002);
+    expect(modded(bolt, activeTalentEffects(s, data)).dmgMult).toBeCloseTo(1.1);
+    expect(modded(data.spells[913], activeTalentEffects(s, data)).dmgMult).toBe(1); // Test Mend is holy, not fire
+  });
+
+  it('resets for a rising fee', () => {
+    const s = mage();
+    s.char.level = 12; s.gold = 100_000;
+    learnTalent(s, data, 1003);
+    expect(resetTalents(s).ok).toBe(true);
+    expect(s.gold).toBe(90_000);
+    expect(pointsSpent(s)).toBe(0);
+    learnTalent(s, data, 1003);
+    expect(resetCost(s)).toBe(50_000);
   });
 });
 

@@ -95,3 +95,6 @@ export const fmtTime = (ms: number) => {
   const m = Math.floor(s / 60), h = Math.floor(m / 60);
   return h ? `${h}h ${m % 60}m` : `${m}m ${s % 60}s`;
 };
+
+/** Hides the floating tooltip (its element may unmount without a mouseleave, e.g. on page change). */
+export function hideTip(): void { setTip?.(null); }

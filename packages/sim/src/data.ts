@@ -1,6 +1,9 @@
 // Static game data, built locally by the importer from the client DBCs + the VMaNGOS world DB.
 // The built JSON is Blizzard-derived and lives only in the local cache, never in git.
 
+import type { ClassSpellOffer, SpellDef } from './spells.js';
+import type { TalentDef, TalentTabDef } from './talents.js';
+
 export type ItemId = number;
 export type Copper = number;
 export type Faction = 'alliance' | 'horde';
@@ -124,6 +127,18 @@ export interface GameData {
   classes: { id: number; name: string }[];
   /** Playable classes per race (CharBaseInfo.dbc). */
   raceClasses: Record<number, number[]>;
+  /** Weapon and armor skills each class may learn, with the level they unlock at (SkillRaceClassInfo.dbc). */
+  classSkills: Record<number, Record<number, number>>;
+  /** SkillLine names for weapon skills and Defense. */
+  skillNames: Record<number, string>;
+  /** Every class spell rank the game uses. */
+  spells: Record<number, SpellDef>;
+  /** What each class learns: from its trainers (level, cost), plus starting spells at level 1 for free. */
+  classSpells: Record<number, ClassSpellOffer[]>;
+  /** Zones with a trainer for each class. */
+  classTrainerZones: Record<number, number[]>;
+  talents: Record<number, TalentDef>;
+  talentTabs: Record<number, TalentTabDef>;
   /** Where each race starts. */
   startZones: Record<number, number>;
   /** [race][class][level] = [str, agi, sta, int, spi] */

@@ -47,6 +47,10 @@ describe.skipIf(!ready)('Elwynn import', () => {
       expect(startAction(s, data, { kind: 'gather', node: 1731 }).ok).toBe(true);
       advance(s, data, 60 * 60_000);
       expect(s.inventory[2770]).toBeGreaterThan(0); // Copper Ore
+      // Talents: three warrior trees, and a real spell modifier comes through (Improved Fireball: -0.1s cast per rank).
+      expect(Object.values(data.talentTabs).filter(t => t.cls === 1)).toHaveLength(3);
+      const impFireball = Object.values(data.talents).find(t => t.name === 'Improved Fireball')!;
+      expect(impFireball.effects[0]).toEqual([expect.objectContaining({ k: 'spellMod', op: 'castTime', flat: -100 })]);
     } finally {
       client.close();
       fs.rmSync(dir, { recursive: true, force: true });

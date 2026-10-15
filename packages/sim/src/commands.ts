@@ -3,8 +3,9 @@
 import type { GameData } from './data.js';
 import type { Action, GameState, Profession, Slot } from './state.js';
 import { PROFESSIONS, SLOTS } from './state.js';
+import { learnTalent, resetTalents } from './talents.js';
 import {
-  buy, equip, learnRecipe, sell, startAction, stopAction, train, trainRiding, unequip, type CommandResult,
+  buy, equip, learnRecipe, sell, startAction, stopAction, train, trainRiding, trainSpells, unequip, type CommandResult,
 } from './engine.js';
 
 export type Command =
@@ -18,7 +19,10 @@ export type Command =
   | { name: 'equip'; item: number }
   | { name: 'unequip'; slot: Slot }
   | { name: 'settings'; autoEat?: boolean; eatBelowPct?: number; restBelowPct?: number }
-  | { name: 'trainRiding' };
+  | { name: 'trainRiding' }
+  | { name: 'trainSpells' }
+  | { name: 'learnTalent'; talent: number }
+  | { name: 'resetTalents' };
 
 const int = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 
@@ -37,7 +41,8 @@ export function parseCommand(raw: unknown): Command | null {
       if (a.kind === 'travel' && int(a.to, 1, 1e7)) return { name: 'start', action: { kind: 'travel', to: a.to as number } };
       return null;
     }
-    case 'stop': case 'sellJunk': case 'trainRiding': return { name: c.name };
+    case 'stop': case 'sellJunk': case 'trainRiding': case 'trainSpells': case 'resetTalents': return { name: c.name };
+    case 'learnTalent': return int(c.talent, 1, 1e7) ? { name: 'learnTalent', talent: c.talent as number } : null;
     case 'train': return PROFESSIONS.includes(c.skill as Profession) ? { name: 'train', skill: c.skill as Profession } : null;
     case 'learnRecipe': return int(c.recipe, 1, 1e7) ? { name: 'learnRecipe', recipe: c.recipe as number } : null;
     case 'buy': case 'sell':
@@ -70,6 +75,9 @@ export function applyCommand(s: GameState, data: GameData, c: Command): CommandR
     case 'equip': return equip(s, data, c.item);
     case 'unequip': return unequip(s, data, c.slot);
     case 'trainRiding': return trainRiding(s);
+    case 'trainSpells': return trainSpells(s, data);
+    case 'learnTalent': return learnTalent(s, data, c.talent);
+    case 'resetTalents': return resetTalents(s);
     case 'settings':
       if (c.autoEat !== undefined) s.settings.autoEat = c.autoEat;
       if (c.eatBelowPct !== undefined) s.settings.eatBelowPct = c.eatBelowPct;

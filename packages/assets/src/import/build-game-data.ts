@@ -10,6 +10,8 @@ import type {
 import type { Client } from '../client.js';
 import { ZoneLookup } from './zone-lookup.js';
 import { PATCH_1_12, VMangos, type Row } from './vmangos.js';
+import { buildClassSpells } from './class-spells.js';
+import { buildTalents } from './talents.js';
 
 const SKILL_COOKING = 185;
 const LOCKTYPE_HERBALISM = 2, LOCKTYPE_MINING = 3, LOCK_KEY_SKILL = 2;
@@ -267,6 +269,22 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
   const cbi = client.dbc('CharBaseInfo'); // packed: byte 0 race, byte 1 class
   const raceClasses: Record<number, number[]> = {};
   for (const r of cbi.rows()) (raceClasses[cbi.u8(r, 0)] ??= []).push(cbi.u8(r, 1));
+  // Weapon/armor skills each class may learn, and their names (SkillLine categories 6 weapons, 8 armor).
+  const sl = client.dbc('SkillLine'); // 0 id, 1 category, 3 name
+  const skillNames: Record<number, string> = {};
+  for (const r of sl.rows()) if ([6, 8].includes(sl.u32(r, 1))) skillNames[sl.u32(r, 0)] = sl.str(r, 3);
+  const srci = client.dbc('SkillRaceClassInfo'); // 1 skill, 2 raceMask, 3 classMask, 5 minLevel
+  const classSkills: Record<number, Record<number, number>> = {};
+  for (const r of srci.rows()) {
+    const skill = srci.u32(r, 1), mask = srci.u32(r, 3), minLevel = srci.u32(r, 5);
+    if (!skillNames[skill]) continue;
+    for (let cls = 1; cls <= 11; cls++) {
+      if (!(mask & (1 << (cls - 1)))) continue;
+      const m = (classSkills[cls] ??= {});
+      m[skill] = Math.min(m[skill] ?? 99, minLevel);
+    }
+  }
+
   const levelStats: GameData['levelStats'] = {};
   for (const r of vm.all(`SELECT * FROM player_levelstats ORDER BY race, class, level`)) {
     const race = Number(r.race), cls = Number(r.class);
@@ -286,7 +304,22 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
     });
   }
 
-  // Keep only loot tables something can still reach.
+  // ---- class spells, and where each class's trainers are
+  const { spells, classSpells } = buildClassSpells(client, vm, castTimes, durations);
+  const { talents, talentTabs } = buildTalents(client, vm);
+  const classTrainerZones: Record<number, number[]> = {};
+  for (const z of zones) {
+    for (const entry of acc.get(z.id)?.creatures.keys() ?? []) {
+      const t = template(entry);
+      if (!t || Number(t.trainer_type) !== 0 || !Number(t.trainer_class)) continue;
+      const list = (classTrainerZones[Number(t.trainer_class)] ??= []);
+      if (!list.includes(z.id)) list.push(z.id);
+    }
+  }
+  for (const s of Object.values(spells)) for (const e of s.effects) if (e.k === 'conjure') items.add(e.item);
+  for (const id of items) if (!itemDefs[id]) { const t = vm.cachedItem(id); if (t) itemDefs[id] = itemDef(t, icons, vm, durations); }
+  log(`class spells: ${Object.keys(spells).length} spell ranks; trainers in ${new Set(Object.values(classTrainerZones).flat()).size} zones`);
+
   const loot = vm.tables;
   vm.close();
   const startZones: Record<number, number> = {};
@@ -297,7 +330,7 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
     races: raceList.filter(r => [1, 2, 3, 4, 5, 6, 7, 8].includes(r.id))
       .map(r => ({ ...r, faction: [1, 3, 4, 7].includes(r.id) ? 'alliance' as const : 'horde' as const })),
     classes: classes.rows().map(r => ({ id: classes.u32(r, 0), name: classes.str(r, 5) })),
-    raceClasses, startZones,
+    raceClasses, startZones, classSkills, skillNames, spells, classSpells, classTrainerZones, talents, talentTabs,
     levelStats, classStats: classStatsOut, skillRanks,
     zones, creatures, items: itemDefs, nodes, recipes, loot, taxiNodes, taxiPaths,
   };

@@ -57,6 +57,20 @@ export function fishingSkillupChance(skill: number): number {
   return skill < 75 ? 100 : Math.min(100, 2500 / (skill - 50));
 }
 
+// ---------- weapon skills (SkillLine ids) and armor proficiencies
+export const SKILL_DEFENSE = 95, SKILL_UNARMED = 162;
+/** Weapon item subclass -> weapon skill. */
+export const WEAPON_SKILL: Record<number, number> = {
+  0: 44, 1: 172, 2: 45, 3: 46, 4: 54, 5: 160, 6: 229, 7: 43, 8: 55, 10: 136, 13: 473, 15: 173, 16: 176, 18: 226, 19: 228,
+};
+/** Armor item subclass -> armor proficiency skill (cloth, leather, mail, plate, shield). */
+export const ARMOR_SKILL: Record<number, number> = { 1: 415, 2: 414, 3: 413, 4: 293, 6: 433 };
+
+/** Chance (%) that a swing (or a hit taken, for Defense) raises the skill; fast when far below the cap. */
+export function combatSkillupChance(skill: number, max: number): number {
+  return skill >= max ? 0 : Math.max(0.5, 100 * (max - skill) / max);
+}
+
 // ---------- player stats
 export const STAT = { AGI: 3, STR: 4, INT: 5, SPI: 6, STA: 7 } as const;
 

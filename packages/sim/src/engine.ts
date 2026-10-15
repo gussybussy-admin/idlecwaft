@@ -5,6 +5,12 @@ import type { CreatureDef, GameData, ItemDef } from './data.js';
 import { factionOfRace } from './data.js';
 import { discoverTaxis, planTravel, RIDING } from './travel.js';
 import {
+  absorb, combatNextAt, combatStep, knownSpells, maxMana, mobMods, passives, RAGE_MAX, rageFrom, syncPower, type CombatCtx,
+} from './combat.js';
+import { scaled } from './spells.js';
+import { activeTalentEffects, learnTalent, resetTalents, type TalentEffect } from './talents.js';
+import {
+  ARMOR_SKILL, combatSkillupChance, SKILL_DEFENSE, SKILL_UNARMED, WEAPON_SKILL,
   armorReduction, fishingCatchChance, fishingSkillupChance, gatherColor, healthFromStamina,
   healthRegenPerSec, killXp, meleeAttackPower, missChance, recipeColor, SKILLUP_CHANCE, STAT,
 } from './formulas.js';
@@ -26,7 +32,8 @@ export const CRAFT_PAD_MS = 500;                         // between crafts
 
 export type SimEvent =
   | { t: number; type: 'spawn'; mob: Mob }
-  | { t: number; type: 'swing'; who: 'player' | 'mob'; result: 'hit' | 'crit' | 'miss' | 'dodge'; dmg: number }
+  | { t: number; type: 'swing'; who: 'player' | 'mob'; result: 'hit' | 'crit' | 'miss' | 'dodge'; dmg: number; spell?: number }
+  | { t: number; type: 'heal'; amount: number; spell: number }
   | { t: number; type: 'kill'; creature: number; xp: number; gold: number; items: [number, number][] }
   | { t: number; type: 'death' }
   | { t: number; type: 'revive' }
@@ -36,7 +43,8 @@ export type SimEvent =
   | { t: number; type: 'escape' } // a fish got away
   | { t: number; type: 'eat'; item: number }
   | { t: number; type: 'stop'; reason: string }
-  | { t: number; type: 'arrive'; zone: number };
+  | { t: number; type: 'arrive'; zone: number }
+  | { t: number; type: 'combatskill'; skill: number; level: number };
 
 export interface Summary {
   ms: number; xp: number; gold: number; kills: number; deaths: number; levels: number;
@@ -63,9 +71,9 @@ export function summarize(sum: Summary) {
 
 export interface PlayerStats {
   str: number; agi: number; sta: number; int: number; spi: number;
-  maxHp: number; ap: number; armor: number;
+  maxHp: number; maxMana: number; ap: number; armor: number;
   dmgMin: number; dmgMax: number; speedMs: number;
-  crit: number; dodge: number; regenPerSec: number;
+  crit: number; spellCrit: number; meleeHit: number; spellHit: number; dodge: number; regenPerSec: number;
 }
 
 export function playerStats(s: GameState, data: GameData): PlayerStats {
@@ -82,19 +90,39 @@ export function playerStats(s: GameState, data: GameData): PlayerStats {
       else if (type === STAT.INT) int_ += v; else if (type === STAT.SPI) spi += v;
     }
   }
-  armor += agi * 2;
+  // Known self buffs (Battle Shout, Arcane Intellect, Fortitude, Devotion Aura, ...) are always on.
+  const p = passives(s, data);
+  str += p.str; agi += p.agi; sta += p.sta; int_ += p.int; spi += p.spi;
+  // Talents: flat stats first, then percentages (Strength of the Earth-style % talents multiply the total).
+  const tal = activeTalentEffects(s, data);
+  const sum = (k: TalentEffect['k'], f: (e: TalentEffect) => number) => tal.filter(e => e.k === k).reduce((a, e) => a + f(e), 0);
+  const statOf = (e: TalentEffect, which: string) => ('stat' in e && (e.stat === which || e.stat === 'all'));
+  str += sum('stat', e => statOf(e, 'str') ? (e as { amount: number }).amount : 0);
+  agi += sum('stat', e => statOf(e, 'agi') ? (e as { amount: number }).amount : 0);
+  sta += sum('stat', e => statOf(e, 'sta') ? (e as { amount: number }).amount : 0);
+  int_ += sum('stat', e => statOf(e, 'int') ? (e as { amount: number }).amount : 0);
+  spi += sum('stat', e => statOf(e, 'spi') ? (e as { amount: number }).amount : 0);
+  const pct = (which: string) => 1 + sum('statPct', e => statOf(e, which) ? (e as { pct: number }).pct : 0) / 100;
+  str = Math.round(str * pct('str')); agi = Math.round(agi * pct('agi')); sta = Math.round(sta * pct('sta'));
+  int_ = Math.round(int_ * pct('int')); spi = Math.round(spi * pct('spi'));
+  armor += agi * 2 + p.armor + sum('armor', e => (e as { amount: number }).amount);
+  armor = Math.round(armor * (1 + sum('armorPct', e => (e as { pct: number }).pct) / 100));
   const baseHp = data.classStats[cls]?.[level]?.[0] ?? 20;
-  const ap = meleeAttackPower(cls, level, str, agi);
+  const ap = meleeAttackPower(cls, level, str, agi) + p.ap + sum('ap', e => (e as { amount: number }).amount);
   const weapon = s.equipment.mainhand ? data.items[s.equipment.mainhand] : undefined;
   const speedMs = weapon?.delayMs || 2000;
   const bonus = (ap / 14) * (speedMs / 1000);
   return {
     str, agi, sta, int: int_, spi, armor, ap, speedMs,
-    maxHp: baseHp + healthFromStamina(sta),
+    maxHp: Math.round((baseHp + healthFromStamina(sta)) * (1 + sum('healthPct', e => (e as { pct: number }).pct) / 100)),
+    maxMana: Math.round(maxMana(s, data, int_) * (1 + sum('manaPct', e => (e as { pct: number }).pct) / 100)),
     dmgMin: Math.max(1, Math.round((weapon?.dmgMin || 1) + bonus)),
     dmgMax: Math.max(1, Math.round((weapon?.dmgMax || 2) + bonus)),
-    crit: Math.min(50, 5 + agi / 20),
-    dodge: Math.min(30, agi / 20),
+    crit: Math.min(60, 5 + agi / 20 + sum('meleeCrit', e => (e as { pct: number }).pct)),
+    spellCrit: Math.min(50, 5 + int_ / 60 + sum('spellCrit', e => (e as { pct: number }).pct)),
+    meleeHit: sum('meleeHit', e => (e as { pct: number }).pct),
+    spellHit: sum('spellHit', e => (e as { pct: number }).pct),
+    dodge: Math.min(40, agi / 20 + sum('dodge', e => (e as { pct: number }).pct)),
     regenPerSec: healthRegenPerSec(spi),
   };
 }
@@ -136,7 +164,7 @@ function nextEventAt(s: GameState, data: GameData): number | null {
   switch (ph.p) {
     case 'idle': return s.action ? s.now : null;
     case 'search': case 'dead': case 'work': return ph.until;
-    case 'combat': return Math.min(ph.playerSwingAt, ph.mobSwingAt);
+    case 'combat': return combatNextAt(ph);
     case 'rest': {
       const st = playerStats(s, data);
       if (s.char.hp >= st.maxHp) return s.now;
@@ -177,6 +205,8 @@ function regen(s: GameState, data: GameData, to: number): void {
 }
 
 function step(s: GameState, data: GameData, emit: Emit): void {
+  const st = playerStats(s, data);
+  syncPower(s, data, s.now, st.spi, st.int);
   const a = s.action;
   if (!a) { s.phase = { p: 'idle' }; return; }
   switch (a.kind) {
@@ -212,7 +242,7 @@ function stepFight(s: GameState, data: GameData, creatureId: number, emit: Emit)
     const level = int(s.rng, def.levelMin, def.levelMax);
     const hp = def.stats[level - def.levelMin].hp;
     const mob: Mob = { id: def.id, level, hp, maxHp: hp };
-    s.phase = { p: 'combat', mob, playerSwingAt: s.now + 300, mobSwingAt: s.now + 800 };
+    s.phase = { p: 'combat', mob, playerSwingAt: s.now + 300, mobSwingAt: s.now + 800, decideAt: s.now + 100 };
     emit({ t: s.now, type: 'spawn', mob: { ...mob } });
     return;
   }
@@ -241,52 +271,79 @@ function stepFight(s: GameState, data: GameData, creatureId: number, emit: Emit)
 
   const mob = ph.mob;
   const stats = def.stats[mob.level - def.levelMin];
-  if (ph.playerSwingAt <= ph.mobSwingAt) {
-    // player swing
-    const r = s.rng;
-    let result: 'hit' | 'crit' | 'miss' | 'dodge', dmg = 0;
-    const miss = missChance(s.char.level * 5, mob.level * 5);
-    const roll = int(r, 0, 9999) / 100;
-    if (roll < miss) result = 'miss';
-    else if (roll < miss + 5 + (mob.level - s.char.level) * 0.1) result = 'dodge';
-    else {
-      dmg = int(r, st.dmgMin, st.dmgMax);
-      result = chance(r, st.crit) ? 'crit' : 'hit';
-      if (result === 'crit') dmg *= 2;
-      dmg = Math.max(1, Math.round(dmg * (1 - armorReduction(stats.armor, s.char.level))));
-    }
-    mob.hp -= dmg;
-    ph.playerSwingAt = s.now + st.speedMs;
-    emit({ t: s.now, type: 'swing', who: 'player', result, dmg });
-    if (mob.hp <= 0) return onKill(s, data, def, mob, emit);
-  } else {
-    // mob swing
-    const r = s.rng;
-    let result: 'hit' | 'crit' | 'miss' | 'dodge', dmg = 0;
-    const miss = missChance(mob.level * 5, s.char.level * 5);
-    const roll = int(r, 0, 9999) / 100;
-    if (roll < miss) result = 'miss';
-    else if (roll < miss + st.dodge) result = 'dodge';
-    else {
-      dmg = int(r, stats.dmgMin, stats.dmgMax);
-      result = chance(r, 5) ? 'crit' : 'hit';
-      if (result === 'crit') dmg *= 2;
-      dmg = Math.max(1, Math.round(dmg * (1 - armorReduction(st.armor, mob.level))));
-    }
-    s.char.hp -= dmg;
-    ph.mobSwingAt = s.now + def.attackMs;
-    emit({ t: s.now, type: 'swing', who: 'mob', result, dmg });
-    if (s.char.hp <= 0) {
-      s.char.hp = 0;
-      s.stats.deaths++;
-      log(s, 'death', `You were slain by ${def.name}.`);
-      emit({ t: s.now, type: 'death' });
-      s.phase = { p: 'dead', from: s.now, until: s.now + DEATH_MS };
-    }
+  const ctx: CombatCtx = {
+    data, def,
+    st: { dmgMin: st.dmgMin, dmgMax: st.dmgMax, speedMs: st.speedMs, crit: st.crit, spellCrit: st.spellCrit, meleeHit: st.meleeHit,
+      spellHit: st.spellHit, ap: st.ap, int: st.int, spi: st.spi, level: s.char.level, maxHp: st.maxHp },
+    talents: activeTalentEffects(s, data),
+    emitSwing: (who, result, dmg, spell) => emit({ t: s.now, type: 'swing', who, result, dmg, ...(spell ? { spell } : {}) }),
+    emitHeal: (amount, spell) => emit({ t: s.now, type: 'heal', amount, spell }),
+    raiseWeaponSkill: () => {
+      const wskill = weaponSkillId(s, data);
+      const skill = s.combatSkills[wskill] ?? 1;
+      raiseCombatSkill(s, wskill, emit);
+      return skill;
+    },
+  };
+  const outcome = combatStep(s, ph, ctx);
+  if (outcome === 'killed') return onKill(s, data, def, mob, emit);
+  if (outcome !== 'mob-swing') return;
+
+  // The mob swings: its weapon skill (5 per level) against your Defense, which rises as you're attacked.
+  const r = s.rng;
+  let result: 'hit' | 'crit' | 'miss' | 'dodge', dmg = 0;
+  const defense = s.combatSkills[SKILL_DEFENSE] ?? 1;
+  const miss = missChance(mob.level * 5, defense);
+  const roll = int(r, 0, 9999) / 100;
+  raiseCombatSkill(s, SKILL_DEFENSE, emit);
+  const mods = mobMods(ph, def.attackMs);
+  if (roll < miss) result = 'miss';
+  else if (roll < miss + st.dodge + Math.max(0, (defense - mob.level * 5) * 0.04)) result = 'dodge';
+  else {
+    dmg = Math.max(1, int(r, stats.dmgMin, stats.dmgMax) + mods.dmgDelta);
+    result = chance(r, 5) ? 'crit' : 'hit';
+    if (result === 'crit') dmg *= 2;
+    dmg = Math.max(1, Math.round(dmg * (1 - armorReduction(st.armor, mob.level))));
   }
+  if (result === 'miss' || result === 'dodge') ph.selfAvoidedAt = s.now;
+  dmg = absorb(ph, dmg);
+  s.char.hp -= dmg;
+  ph.mobSwingAt = s.now + mods.attackMs;
+  emit({ t: s.now, type: 'swing', who: 'mob', result, dmg });
+  if (dmg > 0 && s.char.cls === 1) s.char.rage = Math.min(RAGE_MAX, (s.char.rage ?? 0) + rageFrom(dmg, s.char.level, false));
+  const thorns = passives(s, data).thorns;
+  if (thorns && (result === 'hit' || result === 'crit')) {
+    mob.hp -= thorns;
+    emit({ t: s.now, type: 'swing', who: 'player', result: 'hit', dmg: thorns });
+  }
+  ph.decideAt = Math.min(ph.decideAt ?? Infinity, s.now);
+  if (s.char.hp <= 0) {
+    s.char.hp = 0;
+    s.char.rage = 0;
+    s.stats.deaths++;
+    log(s, 'death', `You were slain by ${def.name}.`);
+    emit({ t: s.now, type: 'death' });
+    s.phase = { p: 'dead', from: s.now, until: s.now + DEATH_MS };
+    return;
+  }
+  if (mob.hp <= 0) return onKill(s, data, def, mob, emit);
+}
+
+/** The weapon skill your current main hand uses (Unarmed without a weapon). */
+export function weaponSkillId(s: GameState, data: GameData): number {
+  const w = s.equipment.mainhand ? data.items[s.equipment.mainhand] : undefined;
+  return (w && w.class === 2 && WEAPON_SKILL[w.subclass]) || SKILL_UNARMED;
+}
+
+function raiseCombatSkill(s: GameState, skill: number, emit: Emit): void {
+  const cur = s.combatSkills[skill] ?? 1, max = s.char.level * 5;
+  if (!chance(s.rng, combatSkillupChance(cur, max))) return;
+  s.combatSkills[skill] = cur + 1;
+  emit({ t: s.now, type: 'combatskill', skill, level: cur + 1 });
 }
 
 function onKill(s: GameState, data: GameData, def: CreatureDef, mob: Mob, emit: Emit): void {
+  s.char.rage = 0; // rage fades out of combat
   const xp = s.char.level < data.maxLevel ? killXp(s.char.level, mob.level, def.rank) : 0;
   const gold = def.goldMax ? int(s.rng, def.goldMin, def.goldMax) : 0;
   const drops = rollLoot(data, def.loot, s.rng);
@@ -325,17 +382,57 @@ function maybeEat(s: GameState, data: GameData, emit: Emit): void {
   const ph = s.phase;
   if (ph.p !== 'rest' || ph.eating || !s.settings.autoEat) return;
   const st = playerStats(s, data);
+  drinkIfNeeded(s, data, st, emit);
   const missing = st.maxHp - s.char.hp;
   if (missing <= 0) return;
-  const foods = Object.keys(s.inventory).map(Number).map(id => data.items[id])
+  const edible = () => Object.keys(s.inventory).map(Number).map(id => data.items[id])
     .filter((it): it is ItemDef => !!it?.food?.heal && it.reqLevel <= s.char.level)
     .sort((a, b) => a.food!.heal - b.food!.heal);
+  let foods = edible();
+  if (!foods.length && conjure(s, data, 'heal', emit)) foods = edible();
   if (!foods.length) return;
   const pick = foods.find(f => f.food!.heal >= missing) ?? foods[foods.length - 1];
   addItem(s, pick.id, -1);
   const ticks = Math.max(1, Math.round(pick.food!.durationMs / REGEN_TICK_MS));
   ph.eating = { item: pick.id, perTick: Math.max(1, Math.round(pick.food!.heal / ticks)), until: s.now + pick.food!.durationMs };
   emit({ t: s.now, type: 'eat', item: pick.id });
+}
+
+/**
+ * Casters drink while resting when below half mana. (Mana from a drink is applied when you sit down;
+ * health from food still arrives tick by tick, since food is the only way health comes back.)
+ */
+function drinkIfNeeded(s: GameState, data: GameData, st: PlayerStats, emit: Emit): void {
+  if (!st.maxMana || (s.char.mana ?? 0) >= st.maxMana * 0.5) return;
+  const drinks = () => Object.keys(s.inventory).map(Number).map(id => data.items[id])
+    .filter((it): it is ItemDef => !!it?.food?.mana && it.reqLevel <= s.char.level).sort((a, b) => a.food!.mana - b.food!.mana);
+  let list = drinks();
+  if (!list.length && conjure(s, data, 'mana', emit)) list = drinks();
+  const missing = st.maxMana - (s.char.mana ?? 0);
+  const pick = list.find(d => d.food!.mana >= missing) ?? list[list.length - 1];
+  if (!pick) return;
+  addItem(s, pick.id, -1);
+  s.char.mana = Math.min(st.maxMana, (s.char.mana ?? 0) + pick.food!.mana);
+  emit({ t: s.now, type: 'eat', item: pick.id });
+}
+
+/** Conjure Food / Water (mages): make a stack from mana when you've run out. */
+function conjure(s: GameState, data: GameData, want: 'heal' | 'mana', emit: Emit): boolean {
+  for (const sp of knownSpells(s, data)) {
+    for (const e of sp.effects) {
+      if (e.k !== 'conjure') continue;
+      const it = data.items[e.item];
+      if (!it?.food || !(want === 'heal' ? it.food.heal : it.food.mana)) continue;
+      if ((s.char.mana ?? 0) < sp.cost) return false;
+      s.char.mana = (s.char.mana ?? 0) - sp.cost;
+      s.char.lastCastAt = s.now;
+      addItem(s, e.item, Math.max(1, Math.round(scaled(e.count, e.perLevel, sp, s.char.level))));
+      log(s, 'info', `You conjure ${it.name}.`);
+      emit({ t: s.now, type: 'harvest', skill: 'cooking', items: [[e.item, 1]] });
+      return true;
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------- professions
@@ -466,6 +563,31 @@ function stepTravel(s: GameState, data: GameData, to: number, emit: Emit): void 
   s.phase = { p: 'idle' };
 }
 
+/** Spells your class trainer would teach you now (level reached, not yet known). */
+export function trainableSpells(s: GameState, data: GameData) {
+  return (data.classSpells?.[s.char.cls] ?? []).filter(o => o.level <= s.char.level && !s.spells.includes(o.spell));
+}
+
+/** Learn everything your class trainer offers at your level, cheapest first, while the money lasts. */
+export function trainSpells(s: GameState, data: GameData): CommandResult {
+  if (!(data.classTrainerZones?.[s.char.cls] ?? []).includes(s.zone)) {
+    const cls = data.classes.find(c => c.id === s.char.cls)?.name ?? 'class';
+    return fail(`There's no ${cls.toLowerCase()} trainer here.`);
+  }
+  const offers = trainableSpells(s, data).sort((a, b) => a.cost - b.cost);
+  if (!offers.length) return fail('You have nothing new to learn yet.');
+  let learned = 0;
+  for (const o of offers) {
+    if (s.gold < o.cost) break;
+    s.gold -= o.cost;
+    s.spells.push(o.spell);
+    learned++;
+  }
+  if (!learned) return fail(`Training costs ${formatMoney(offers[0].cost)}.`);
+  log(s, 'skill', `You learned ${learned} new spell${learned > 1 ? 's' : ''}${learned < offers.length ? ` (${offers.length - learned} more when you can afford them)` : ''}.`);
+  return ok;
+}
+
 export function trainRiding(s: GameState): CommandResult {
   const next = RIDING.find(r => r.bonus > s.riding);
   if (!next) return fail('You already ride as fast as anyone.');
@@ -581,12 +703,28 @@ export const TWO_HAND = 17;
 
 export function equipSlots(it: ItemDef): Slot[] { return INV_SLOTS[it.invType] ?? []; }
 
+/** The proficiency an item needs (weapon or armor skill), if any. */
+export function proficiencyFor(it: ItemDef): number | null {
+  if (it.class === 2 && it.subclass !== 20) return WEAPON_SKILL[it.subclass] ?? null; // fishing poles need none
+  if (it.class === 4 && it.invType !== 16) return ARMOR_SKILL[it.subclass] ?? null;   // cloaks are cloth for everyone
+  return null;
+}
+
 export function equip(s: GameState, data: GameData, item: number): CommandResult {
   const it = data.items[item];
   if (!it || !hasItem(s, item)) return fail("You don't have that.");
   const slots = equipSlots(it);
   if (!slots.length) return fail("You can't equip that.");
   if (it.reqLevel > s.char.level) return fail(`Requires level ${it.reqLevel}.`);
+  const prof = proficiencyFor(it);
+  const allowed = data.classSkills?.[s.char.cls];
+  if (prof && allowed) {
+    const name = data.skillNames?.[prof] ?? 'that';
+    if (allowed[prof] === undefined) return fail(`${data.classes.find(c => c.id === s.char.cls)?.name ?? 'Your class'}s can't use ${name}.`);
+    if (allowed[prof] > s.char.level) return fail(`You learn ${name} at level ${allowed[prof]}.`);
+  }
+  // A weapon type you've never used starts at skill 1, as in vanilla.
+  if (prof && it.class === 2 && !s.combatSkills[prof]) s.combatSkills[prof] = 1;
   if (s.phase.p === 'combat') return fail("You can't change equipment in combat.");
   const slot = slots.find(sl => !s.equipment[sl]) ?? slots[0];
   addItem(s, item, -1);
