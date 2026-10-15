@@ -1,0 +1,164 @@
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { playerStats, type GameData, type GameState, type Profession, type Summary } from '@idle/sim';
+import { game } from './game.js';
+import { BagsPanel, CharacterPage, CombatPage, CookingPage, FishingPage, GatherPage, LogPage, SKILL_ICON, TownPage } from './pages.js';
+import { Bar, fmtTime, Icon, ItemIcon, Money, TooltipHost } from './ui.js';
+import { randomLook, type Look } from './character.js';
+import { Diorama } from './diorama.js';
+
+/** A small turntable of the character being created, using the same diorama as combat. */
+function CharacterPreview({ look }: { look: Look }) {
+  const host = useRef<HTMLDivElement>(null);
+  const dio = useRef<Diorama | null>(null);
+  useEffect(() => { dio.current = new Diorama(host.current!, { preview: true }); return () => dio.current?.dispose(); }, []);
+  useEffect(() => { dio.current?.setPlayer(look); }, [look]);
+  return <div className="diorama" ref={host} style={{ height: 260, marginTop: 10 }} />;
+}
+
+type Page = 'combat' | Profession | 'character' | 'bags' | 'town' | 'log';
+
+export function App() {
+  useSyncExternalStore(game.subscribe, game.getVersion);
+  const [ready, setReady] = useState<'loading' | 'ok' | string>('loading');
+  const [page, setPage] = useState<Page>(() => { try { return (localStorage.getItem('idlecwaft.page') as Page) || 'combat'; } catch { return 'combat'; } });
+  useEffect(() => { game.load().then(() => setReady('ok'), e => setReady(String(e.message ?? e))); return () => game.dispose(); }, []);
+  useEffect(() => { try { localStorage.setItem('idlecwaft.page', page); } catch { /* ignore */ } }, [page]);
+
+  if (ready === 'loading') return <div className="create"><h2>Loading…</h2></div>;
+  if (ready !== 'ok') return <div className="create"><h2>Can't start</h2><p className="muted">{ready}</p></div>;
+  const s = game.state, data = game.data;
+  if (!s) return <CreateCharacter data={data} />;
+
+  return (
+    <div className="app">
+      <Sidebar s={s} data={data} page={page} setPage={setPage} />
+      <main className="main"><div className="main-inner">
+        {page === 'combat' && <CombatPage s={s} data={data} />}
+        {(page === 'mining' || page === 'herbalism') && <GatherPage s={s} data={data} skill={page} />}
+        {page === 'fishing' && <FishingPage s={s} data={data} />}
+        {page === 'cooking' && <CookingPage s={s} data={data} />}
+        {page === 'character' && <CharacterPage s={s} data={data} />}
+        {page === 'bags' && <BagsPanel s={s} data={data} />}
+        {page === 'town' && <TownPage s={s} data={data} />}
+        {page === 'log' && <LogPage s={s} data={data} />}
+      </div></main>
+      {game.away && <AwayReport sum={game.away} data={data} />}
+      {game.toast && <div className="toast" role="status">{game.toast}</div>}
+      <TooltipHost />
+    </div>
+  );
+}
+
+function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; page: Page; setPage: (p: Page) => void }) {
+  const st = playerStats(s, data);
+  const toNext = data.xpToNext[s.char.level] ?? 0;
+  const cls = data.classes.find(c => c.id === s.char.cls)?.name;
+  const actionPage: Page | null = !s.action ? null : s.action.kind === 'fight' ? 'combat' : s.action.kind === 'fish' ? 'fishing'
+    : s.action.kind === 'cook' ? 'cooking' : data.nodes[s.action.node]?.skill ?? null;
+  const item = (p: Page, icon: string, label: string, right?: string) => (
+    <button className={`${page === p ? 'on' : ''} ${actionPage === p ? 'active-action' : ''}`} onClick={() => setPage(p)}>
+      <Icon name={icon} size="sm" /> {label} {right !== undefined && <span className="lvl">{right}</span>}
+    </button>
+  );
+  const skill = (p: Profession) => item(p, SKILL_ICON[p], p[0].toUpperCase() + p.slice(1), s.skills[p].max ? `${s.skills[p].level}/${s.skills[p].max}` : '—');
+  return (
+    <aside className="sidebar">
+      <div className="charcard">
+        <div className="name">{s.char.name}</div>
+        <div className="sub">Level {s.char.level} {cls} · {data.zones.find(z => z.id === s.zone)?.name}</div>
+        <Bar kind="hp" value={s.char.hp} max={st.maxHp} label={`${Math.floor(s.char.hp)} / ${st.maxHp}`} />
+        {s.char.level < data.maxLevel && <Bar kind="xp" value={s.char.xp} max={toNext} label={`${s.char.xp} / ${toNext} XP`} />}
+        <Money copper={s.gold} />
+        <ActivityLine s={s} data={data} />
+      </div>
+      <nav className="nav">
+        <div className="group">Adventure</div>
+        {item('combat', 'Ability_Warrior_OffensiveStance', 'Combat', String(s.char.level))}
+        <div className="group">Gathering</div>
+        {skill('mining')}{skill('herbalism')}{skill('fishing')}
+        <div className="group">Production</div>
+        {skill('cooking')}
+        <div className="group">Character</div>
+        {item('character', 'INV_Chest_Chain', 'Equipment')}
+        {item('bags', 'INV_Misc_Bag_08', 'Bags', String(Object.keys(s.inventory).length))}
+        {item('town', 'INV_Misc_Bag_10', 'Trainers & Vendors')}
+        {item('log', 'INV_Misc_Note_01', 'Log & Settings')}
+      </nav>
+    </aside>
+  );
+}
+
+function ActivityLine({ s, data }: { s: GameState; data: GameData }) {
+  const a = s.action;
+  const text = !a ? 'Idle'
+    : a.kind === 'fight' ? `Fighting ${data.creatures[a.creature]?.name}`
+    : a.kind === 'gather' ? `${data.nodes[a.node]?.skill === 'mining' ? 'Mining' : 'Gathering'} ${data.nodes[a.node]?.name}`
+    : a.kind === 'fish' ? 'Fishing' : `Cooking ${data.recipes[a.recipe]?.name}`;
+  return <div className="sub" style={{ color: a ? 'var(--gold-soft)' : undefined }}>{text}</div>;
+}
+
+function AwayReport({ sum, data }: { sum: Summary; data: GameData }) {
+  const items = Object.entries(sum.items).map(([i, n]) => [Number(i), n] as [number, number]).filter(([i]) => data.items[i])
+    .sort((a, b) => data.items[b[0]].quality - data.items[a[0]].quality || b[1] - a[1]);
+  const skills = Object.entries(sum.skillups);
+  return (
+    <div className="modal-back" onClick={() => game.dismissAway()}>
+      <div className="panel modal" onClick={e => e.stopPropagation()}>
+        <div className="panel-head"><h2>While you were away</h2></div>
+        <p className="muted" style={{ marginTop: 0 }}>{fmtTime(sum.ms)} of progress{sum.ms >= 24 * 3600_000 ? ' (the 24 hour maximum)' : ''}.</p>
+        <div className="stats" style={{ marginBottom: 12 }}>
+          {sum.kills > 0 && <><span className="k">Kills</span><span className="v">{sum.kills}</span></>}
+          {sum.xp > 0 && <><span className="k">Experience</span><span className="v">{sum.xp.toLocaleString()}</span></>}
+          {sum.levels > 0 && <><span className="k">Levels gained</span><span className="v" style={{ color: 'var(--gold)' }}>+{sum.levels}</span></>}
+          {sum.gold > 0 && <><span className="k">Money looted</span><span className="v"><Money copper={sum.gold} /></span></>}
+          {skills.map(([k, n]) => <span key={k} style={{ display: 'contents' }}><span className="k">{k[0].toUpperCase() + k.slice(1)}</span><span className="v" style={{ color: '#6fa8ff' }}>+{n}</span></span>)}
+          {sum.deaths > 0 && <><span className="k">Deaths</span><span className="v" style={{ color: '#ff5555' }}>{sum.deaths}</span></>}
+        </div>
+        {items.length > 0 && <div className="bag" style={{ marginBottom: 12 }}>{items.map(([i, n]) => <div key={i} className="slot"><ItemIcon id={i} data={data} count={n} /></div>)}</div>}
+        <button className="btn" onClick={() => game.dismissAway()}>Continue</button>
+      </div>
+    </div>
+  );
+}
+
+const CLASS_COMBOS: Record<number, number[]> = { 1: [1, 2, 4, 5, 8, 9], 3: [1, 2, 3, 4, 5], 4: [1, 3, 4, 5, 11], 7: [1, 4, 8, 9] };
+
+function CreateCharacter({ data }: { data: GameData }) {
+  const alliance = data.races.filter(r => r.faction === 'alliance');
+  const [race, setRace] = useState(1);
+  const [cls, setCls] = useState(1);
+  const [sex, setSex] = useState(0);
+  const [name, setName] = useState('');
+  const [look, setLook] = useState<Look | null>(null);
+  useEffect(() => { randomLook(race, sex).then(setLook); }, [race, sex]);
+  const classes = data.classes.filter(c => CLASS_COMBOS[race]?.includes(c.id));
+  const valid = /^[A-Za-z]{2,12}$/.test(name) && classes.some(c => c.id === cls);
+  return (
+    <div className="create">
+      <h1 style={{ fontSize: 40 }}>World of Idlecraft</h1>
+      <p className="muted" style={{ margin: 0 }}>Create your character. Elwynn Forest awaits; the rest of Azeroth comes later.</p>
+      <div className="panel">
+        <h3>Race</h3>
+        <div className="choices" style={{ marginTop: 8 }}>{alliance.map(r => (
+          <button key={r.id} className={`choice ${race === r.id ? 'on' : ''}`} onClick={() => { setRace(r.id); if (!CLASS_COMBOS[r.id]?.includes(cls)) setCls(CLASS_COMBOS[r.id][0]); }}>{r.name}</button>))}</div>
+        <h3 style={{ marginTop: 16 }}>Class</h3>
+        <div className="choices" style={{ marginTop: 8 }}>{classes.map(c => (
+          <button key={c.id} className={`choice ${cls === c.id ? 'on' : ''}`} onClick={() => setCls(c.id)}>{c.name}</button>))}</div>
+        <p className="faint" style={{ fontSize: 12 }}>Every class fights with weapon attacks for now; class spells and talents arrive in a later phase.</p>
+        <h3 style={{ marginTop: 16 }}>Appearance</h3>
+        <div className="choices" style={{ marginTop: 8 }}>
+          <button className={`choice ${sex === 0 ? 'on' : ''}`} onClick={() => setSex(0)}>Male</button>
+          <button className={`choice ${sex === 1 ? 'on' : ''}`} onClick={() => setSex(1)}>Female</button>
+          <button className="choice" onClick={() => randomLook(race, sex).then(setLook)}>Randomize look</button>
+        </div>
+        {look && <CharacterPreview look={look} />}
+        <h3 style={{ marginTop: 16 }}>Name</h3>
+        <input className="text" style={{ marginTop: 8 }} maxLength={12} value={name} onChange={e => setName(e.target.value)} placeholder="2-12 letters" />
+        <div className="btn-row" style={{ marginTop: 16 }}>
+          <button className="btn" disabled={!valid} onClick={() => game.create(name[0].toUpperCase() + name.slice(1).toLowerCase(), race, cls,
+            look ? { sex: look.sex, skin: look.skin, face: look.face, hairStyle: look.hairStyle, hairColor: look.hairColor, facialHair: look.facialHair } : undefined)}>Enter Elwynn Forest</button>
+        </div>
+      </div>
+    </div>
+  );
+}

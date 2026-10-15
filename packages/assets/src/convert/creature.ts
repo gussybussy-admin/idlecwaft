@@ -5,6 +5,7 @@ import type { Client } from '../client.js';
 import { parseM2 } from '../m2/m2.js';
 import { decodeBLP } from '../blp/blp.js';
 import { m2ToGLB } from '../gltf/m2-to-glb.js';
+import { humanoidFor, RACE_DIRS, type Humanoid } from './characters.js';
 
 // M2 texture types 11-13 are the creature's skin variations from CreatureDisplayInfo.
 const MONSTER_SKIN_1 = 11;
@@ -12,12 +13,20 @@ const MONSTER_SKIN_1 = 11;
 export interface CreatureManifestEntry {
   displayId: number; model: string; scale: number; file: string;
   skins: string[]; animations: number; bytes: number;
+  /** Humanoid NPCs are assembled from a character model at runtime (see convert/characters.ts). */
+  humanoid?: Humanoid;
 }
 
 export function convertCreature(client: Client, displayId: number, cacheDir: string): CreatureManifestEntry {
   const display = client.creatureDisplays().get(displayId);
   if (!display) throw new Error(`no CreatureDisplayInfo ${displayId}`);
-  if (display.extraId) throw new Error(`display ${displayId} is a humanoid (CreatureDisplayInfoExtra), not supported yet`);
+  if (display.extraId) {
+    const humanoid = humanoidFor(client, display.extraId, cacheDir);
+    if (!humanoid || !RACE_DIRS[humanoid.race]) throw new Error(`display ${displayId}: unsupported humanoid race`);
+    return writeManifest(cacheDir, displayId, {
+      displayId, model: display.modelPath, scale: display.scale, file: '', skins: [], animations: 0, bytes: 0, humanoid,
+    });
+  }
   const model = parseM2(client.read(display.modelPath));
   const dir = path.win32.dirname(display.modelPath);
 
@@ -43,10 +52,15 @@ export function convertCreature(client: Client, displayId: number, cacheDir: str
   fs.mkdirSync(outDir, { recursive: true });
   const file = path.join(outDir, `${displayId}.glb`);
   fs.writeFileSync(file, glb);
-  const entry: CreatureManifestEntry = {
+  return writeManifest(cacheDir, displayId, {
     displayId, model: display.modelPath, scale: display.scale, file: `creatures/${displayId}.glb`,
     skins: display.skins.filter(Boolean), animations: model.sequences.length, bytes: glb.length,
-  };
+  });
+}
+
+function writeManifest(cacheDir: string, displayId: number, entry: CreatureManifestEntry): CreatureManifestEntry {
+  const outDir = path.join(cacheDir, 'creatures');
+  fs.mkdirSync(outDir, { recursive: true });
   const manifestPath = path.join(outDir, 'index.json');
   const manifest: Record<string, CreatureManifestEntry> = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : {};
   manifest[displayId] = entry;

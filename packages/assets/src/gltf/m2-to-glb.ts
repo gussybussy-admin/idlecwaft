@@ -16,6 +16,8 @@ export interface ConvertOptions {
   animationNames: Map<number, string>;
   skinProfile?: number;
   name?: string;
+  /** Which animations to export, by AnimationData name (default: all). */
+  keepAnimation?: (name: string) => boolean;
 }
 
 const SEQ_ALIAS = 0x40;
@@ -81,7 +83,8 @@ export function m2ToGLB(m: M2Model, opts: ConvertOptions): Buffer {
         pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], metallicFactor: 0, roughnessFactor: 1,
           ...(tex !== null ? { baseColorTexture: { index: tex } } : {}) },
         doubleSided: !!(mat.flags & 0x4),
-        extras: { wowBlendMode: mat.blendMode, wowRenderFlags: mat.flags },
+        // wowTextureType tells the client which runtime texture (1 skin, 2 cape, 6 hair, 11-13 creature skins) belongs here.
+        extras: { wowBlendMode: mat.blendMode, wowRenderFlags: mat.flags, wowTextureType: m.textures[texSlot]?.type ?? 0 },
       };
       if (mat.blendMode === 1) { item.alphaMode = 'MASK'; item.alphaCutoff = 0.5; }
       else if (mat.blendMode >= 2) item.alphaMode = 'BLEND';
@@ -125,14 +128,23 @@ export function m2ToGLB(m: M2Model, opts: ConvertOptions): Buffer {
     ibm.set([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -b.pivot[0], -b.pivot[1], -b.pivot[2], 1], i * 16);
   });
   const skinIdx = g.push('skins', { joints: boneNode, skeleton: rootNode, inverseBindMatrices: g.accessor(ibm, 'MAT4') });
+  // Geoset (submesh) id per primitive, in primitive order, so the client can toggle hair, gloves, robes...
+  // Stored on the node: three's GLTFLoader copies node extras to userData, but not mesh extras.
   const mesh = g.push('meshes', { name: opts.name ?? m.name, primitives });
-  const meshNode = g.push('nodes', { name: opts.name ?? m.name, mesh, skin: skinIdx });
+  const meshNode = g.push('nodes', { name: opts.name ?? m.name, mesh, skin: skinIdx,
+    extras: { submeshIds: primitives.map(p => (p.extras as { submeshId: number }).submeshId) } });
 
-  // ---- animations: one clip per sequence
+  // ---- animations: one clip per sequence.
+  // Channels are only written for properties some sequence actually animates; everything else stays
+  // at its rest value on the node. Animated properties get a constant key in clips that don't move
+  // them, so switching clips never leaves a bone posed by the previous animation.
+  const animated = (t: M2Track<unknown>) => t.globalSequence < 0 && t.timestamps.length > 0;
+  const moves = m.bones.map(b => ({ t: animated(b.translation), r: animated(b.rotation), s: animated(b.scale) }));
   const seenNames = new Map<string, number>();
   m.sequences.forEach((seq, si) => {
     if (seq.flags & SEQ_ALIAS) return;
     const base = opts.animationNames.get(seq.id) ?? `Anim${seq.id}`;
+    if (opts.keepAnimation && !opts.keepAnimation(base)) return;
     const count = seenNames.get(base) ?? 0;
     seenNames.set(base, count + 1);
     const name = count ? `${base}_${count}` : base;
@@ -149,13 +161,20 @@ export function m2ToGLB(m: M2Model, opts: ConvertOptions): Buffer {
     m.bones.forEach((b, bi) => {
       const parentPivot: Vec3 = b.parent >= 0 ? m.bones[b.parent].pivot : [0, 0, 0];
       const rest = sub(b.pivot, parentPivot);
-      const t = keysOrConstant(b.translation, si, seq, [0, 0, 0] as Vec3);
-      channel(boneNode[bi], 'translation', t.times, t.values.flatMap(v => [v[0] + rest[0], v[1] + rest[1], v[2] + rest[2]]), 3, b.translation.interpolation === 0);
-      const r = keysOrConstant(b.rotation, si, seq, [0, 0, 0, 1] as Quat);
-      channel(boneNode[bi], 'rotation', r.times, r.values.flatMap(normalize), 4, b.rotation.interpolation === 0);
-      const s = keysOrConstant(b.scale, si, seq, [1, 1, 1] as Vec3);
-      channel(boneNode[bi], 'scale', s.times, s.values.flat(), 3, b.scale.interpolation === 0);
+      if (moves[bi].t) {
+        const t = keysOrConstant(b.translation, si, seq, [0, 0, 0] as Vec3);
+        channel(boneNode[bi], 'translation', t.times, t.values.flatMap(v => [v[0] + rest[0], v[1] + rest[1], v[2] + rest[2]]), 3, b.translation.interpolation === 0);
+      }
+      if (moves[bi].r) {
+        const r = keysOrConstant(b.rotation, si, seq, [0, 0, 0, 1] as Quat);
+        channel(boneNode[bi], 'rotation', r.times, r.values.flatMap(normalize), 4, b.rotation.interpolation === 0);
+      }
+      if (moves[bi].s) {
+        const s = keysOrConstant(b.scale, si, seq, [1, 1, 1] as Vec3);
+        channel(boneNode[bi], 'scale', s.times, s.values.flat(), 3, b.scale.interpolation === 0);
+      }
     });
+    if (!channels.length) return;
     g.push('animations', {
       name, samplers: samplersOut, channels,
       extras: { sequenceId: seq.id, variation: seq.variation, durationMs: seq.end - seq.start,

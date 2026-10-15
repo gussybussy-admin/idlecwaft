@@ -20,7 +20,36 @@ npm install
 Copy `idle.config.example.json` to `idle.config.json` and set `clientPath` to your WoW 1.12.1 folder
 (the one containing `WoW.exe` and `Data/`).
 
-## Asset converter
+## Game data (VMaNGOS)
+
+The client doesn't contain creature stats, spawns, loot or vendors. They come from the
+[VMaNGOS](https://github.com/vmangos/core) world database (GPL-2.0). Download the SQLite release
+(`db-sqlite-*.zip` from the `db_latest` release) and extract it so that this file exists:
+
+```
+data/vmangos/db/sqlite-dump/mangos.sqlite
+```
+
+`data/vmangos/` is gitignored.
+
+## Build the local cache
+
+```bash
+npm run assets -- import
+```
+
+This builds Elwynn Forest's game data, icons, UI art, fonts, scenery, character and creature models
+into `cache/` (about 95 MB, a couple of minutes).
+
+## Play
+
+```bash
+npm run game
+```
+
+Opens on http://localhost:5174.
+
+## Asset converter commands
 
 ```bash
 npm run assets -- recon

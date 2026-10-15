@@ -9,8 +9,9 @@
   "scripts": {
     "assets": "tsx packages/assets/src/cli.ts",
     "viewer": "npm run dev -w @idle/viewer",
+    "game": "npm run dev -w @idle/game",
     "test": "vitest run",
-    "typecheck": "tsc -p packages/assets && tsc -p apps/viewer"
+    "typecheck": "tsc -p packages/sim && tsc -p packages/assets && tsc -p apps/viewer && tsc -p apps/game"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

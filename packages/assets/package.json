@@ -9,5 +9,12 @@
   },
   "bin": {
     "idle-assets": "./src/cli.ts"
+  },
+  "dependencies": {
+    "@idle/sim": "*",
+    "better-sqlite3": "^11.10.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0"
   }
 }
