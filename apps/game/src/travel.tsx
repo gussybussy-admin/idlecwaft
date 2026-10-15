@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { factionOfRace, planTravel, RIDING, type GameData, type GameState } from '@idle/sim';
 import { game } from './game.js';
 import { Bar, fmtTime, Money } from './ui.js';
+import { ActionScene } from './pages.js';
 
 type P = { s: GameState; data: GameData };
 const CONTINENTS = ['Eastern Kingdoms', 'Kalimdor'];
@@ -16,6 +17,7 @@ export function TravelPage({ s, data }: P) {
   return (
     <>
       <div className="panel-head"><h2>Travel</h2><span className="muted">You are in {here.name}</span></div>
+      <ActionScene s={s} data={data} hint={`In ${here.name}`} />
       {travelling !== null && <TravelProgress s={s} data={data} to={travelling} />}
       <div className="panel tight">
         <div className="btn-row" style={{ justifyContent: 'space-between' }}>

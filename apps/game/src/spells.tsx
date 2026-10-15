@@ -4,7 +4,7 @@ import {
   trainableSpells, usesMana, POINTS_PER_ROW, type GameData, type GameState, type SpellDef, type TalentDef, type TalentEffect,
 } from '@idle/sim';
 import { game } from './game.js';
-import { Bar, Icon, Money, withTip } from './ui.js';
+import { Bar, Icon, Money, useSearch, withTip } from './ui.js';
 
 type P = { s: GameState; data: GameData };
 
@@ -35,7 +35,8 @@ function SpellTip({ sp, s }: { sp: SpellDef; s: GameState }) {
 }
 
 export function SpellbookPage({ s, data }: P) {
-  const known = knownSpells(s, data).sort((a, b) => (a.spellLevel - b.spellLevel) || a.name.localeCompare(b.name));
+  const { box, match } = useSearch('Search spells');
+  const known = knownSpells(s, data).filter(sp => match(sp.name)).sort((a, b) => (a.spellLevel - b.spellLevel) || a.name.localeCompare(b.name));
   const offers = trainableSpells(s, data);
   const upcoming = (data.classSpells?.[s.char.cls] ?? []).filter(o => o.level > s.char.level && o.level <= s.char.level + 6 && !s.spells.includes(o.spell));
   const total = offers.reduce((a, o) => a + o.cost, 0);
@@ -54,7 +55,7 @@ export function SpellbookPage({ s, data }: P) {
   };
   return (
     <>
-      <div className="panel-head"><h2>Spellbook</h2><span className="muted">{known.length} spells the rotation can use</span></div>
+      <div className="panel-head"><h2>Spellbook</h2><span className="muted">{known.length} spells the rotation can use</span><span className="spacer" />{box}</div>
       <div className="panel">
         <p className="muted" style={{ marginTop: 0 }}>In a fight your character casts these on their own: the strongest affordable spell first, heals when hurt, buffs and seals kept up.</p>
         <div className="grid">
@@ -72,7 +73,7 @@ export function SpellbookPage({ s, data }: P) {
           {offers.length > 0 && <button className="btn" disabled={!here || s.gold < total} onClick={() => game.command({ name: 'trainSpells' })}>
             Train all ({offers.length}) {total ? <Money copper={total} /> : 'free'}</button>}</div>
         {!here && <p className="muted" style={{ marginTop: 0 }}>No {cls.toLowerCase()} trainer in this zone. Trainers: {trainerZones.map(z => data.zones.find(x => x.id === z)?.name).filter(Boolean).join(', ') || 'none'}.</p>}
-        {offers.length ? <div className="grid">{offers.map(o => offerCard(o))}</div> : <p className="muted">Nothing new to learn at level {s.char.level}.</p>}
+        {offers.length ? <div className="grid">{offers.filter(o => match(data.spells[o.spell]?.name)).map(o => offerCard(o))}</div> : <p className="muted">Nothing new to learn at level {s.char.level}.</p>}
         {upcoming.length > 0 && <><h3 style={{ marginTop: 16 }}>Coming up</h3><div className="grid">{upcoming.map(o => offerCard(o, true))}</div></>}
       </div>
     </>

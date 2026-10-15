@@ -5,8 +5,8 @@ import {
   type GameData, type GameState, type LootRef, type QuestDef,
 } from '@idle/sim';
 import { game } from './game.js';
-import { WorkBar } from './pages.js';
-import { Bar, fmtTime, ItemIcon, ItemTooltip, Money, withTip } from './ui.js';
+import { ActionScene, WorkBar } from './pages.js';
+import { Bar, fmtTime, ItemIcon, ItemTooltip, Money, useSearch, withTip } from './ui.js';
 
 type P = { s: GameState; data: GameData };
 
@@ -86,7 +86,9 @@ export function QuestsPage({ s, data }: P) {
   const log = Object.keys(s.quests).map(Number).sort((a, b) => Number(questComplete(s, data, b)) - Number(questComplete(s, data, a)) || (data.quests[a]?.level ?? 0) - (data.quests[b]?.level ?? 0));
   const here = availableQuests(s, data);
   const [showLow, setShowLow] = useState(false);
-  const shown = here.filter(q => showLow || q.level >= s.char.level - 6);
+  const { box, match } = useSearch('Search quests');
+  const shown = here.filter(q => (showLow || q.level >= s.char.level - 6) && match(q.name, q.objectives, q.giver));
+  const logShown = log.filter(id => match(data.quests[id]?.name, data.quests[id]?.objectives));
   // Where else quests wait for this character, near their level.
   const elsewhere = useMemo(() => {
     const m = new Map<number, number>();
@@ -99,9 +101,10 @@ export function QuestsPage({ s, data }: P) {
   return (
     <>
       <div className="panel-head"><h2>Quests</h2><span className="muted">{log.length} / 20 in your log · {s.questsDone.length} completed</span></div>
+      <ActionScene s={s} data={data} hint="Accept a quest, then hunt or run its task" />
       <div className="panel">
-        <h3>Quest log</h3>
-        {log.length ? <div className="grid">{log.map(id => <ActiveQuest key={id} s={s} data={data} id={id} />)}</div>
+        <div className="panel-head"><h3>Quest log</h3><span className="spacer" />{box}</div>
+        {log.length ? <div className="grid">{logShown.map(id => <ActiveQuest key={id} s={s} data={data} id={id} />)}</div>
           : <p className="muted">Your quest log is empty. Pick something up below.</p>}
       </div>
       <div className="panel">

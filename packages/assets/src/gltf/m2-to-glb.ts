@@ -123,6 +123,14 @@ export function m2ToGLB(m: M2Model, opts: ConvertOptions): Buffer {
     const parent = b.parent >= 0 ? g.json.nodes[boneNode[b.parent]] : g.json.nodes[rootNode];
     ((parent.children ??= []) as number[]).push(boneNode[i]);
   });
+  // Attachment points (helmet, shoulders, hands, ...) as child nodes `attach<id>` of their bone, so
+  // item models can be parented to them and follow the animation.
+  for (const a of m.attachments) {
+    const bone = m.bones[a.bone];
+    if (!bone) continue;
+    const node = g.push('nodes', { name: `attach${a.id}`, translation: sub(a.pos, bone.pivot) });
+    ((g.json.nodes[boneNode[a.bone]].children ??= []) as number[]).push(node);
+  }
   const ibm = new Float32Array(m.bones.length * 16);
   m.bones.forEach((b, i) => {
     ibm.set([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -b.pivot[0], -b.pivot[1], -b.pivot[2], 1], i * 16);

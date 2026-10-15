@@ -3,7 +3,7 @@ import {
   advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, planTravel, playerStats,
   rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, trainSpells, knownSpells,
   learnTalent, pointsSpent, modded, activeTalentEffects, resetTalents, resetCost,
-  disenchant, unlearnProfession, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
+  disenchant, unlearnProfession, itemCategory, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
   type GameState, type SimEvent,
 } from '../src/index.js';
 import { fixture } from './fixture.js';
@@ -343,6 +343,14 @@ describe('combat', () => {
     advance(s, data, T0 + 30 * 60_000, e => events.push(e));
     expect(events.some(e => e.type === 'eat')).toBe(true);
     expect(s.inventory[5] ?? 0).toBeLessThan(5);
+  });
+});
+
+describe('item categories', () => {
+  it('sorts items by what they are for', () => {
+    const cat = (id: number) => itemCategory(data, data.items[id]);
+    expect([cat(12), cat(23), cat(5), cat(22), cat(2), cat(10), cat(11), cat(5956), cat(7), cat(4)])
+      .toEqual(['Weapons', 'Armor', 'Consumables', 'Consumables', 'Trade Goods', 'Tools', 'Tools', 'Tools', 'Quest Items', 'Junk']);
   });
 });
 

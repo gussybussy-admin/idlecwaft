@@ -8,6 +8,9 @@ import { convertIcons } from './icons.js';
 import { convertUiAssets, UI_ICONS } from './ui-assets.js';
 import { convertCharacters } from './characters.js';
 
+/** Bumped when converted art changes shape, so caches convert again (2: attachment points on characters). */
+export const ART_VERSION = 2;
+
 export function convertArt(client: Client, data: GameData, cacheDir: string, log: (s: string) => void = console.log, all = false): void {
   const t0 = Date.now();
   const icons = convertIcons(client, all ? data : { ...data, items: {} }, cacheDir, UI_ICONS);

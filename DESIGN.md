@@ -253,15 +253,36 @@ restarts.
 | All professions, recipes, enchanting, disenchanting, skinning, potions, bandages | done (Phase 4c) |
 | Guild: server, accounts, roster, bank, requests, crafting orders, chat, feed | done (Phases 3, 4c) |
 | Quests (non-instance), reputation | done (Phase 4d) |
+| Playtest feedback: filtering, categories, activity scenes, visible gear | done (Phase 4e) |
 | Dungeons, raids (and their quests) | Phases 5, 6 |
+
+### Phase 4e — playtest feedback
+
+From playing Phase 4 with the guild:
+
+- **Categories and filters.** Items fall into categories (weapons, armor, consumables, trade goods,
+  tools, recipes, quest items, containers, ammo, junk) from their class, quality and what recipes use
+  them. Bags, vendors and the guild bank get a search box and category chips, grouped by category;
+  quests and the spellbook get a search box (recipes already had one). Tools such as the Blacksmith
+  Hammer show under Tools at every vendor that sells them.
+- **A scene for every activity.** One diorama follows whatever the character does: fighting; mining
+  or gathering the node's own model (from GameObjectDisplayInfo); fishing at a pond with the real
+  bobber; crafting at a station (campfire, anvil, forge, alchemy set, gnome machine, workbench)
+  with a fitting animation; skinning kneels at the corpse; quest tasks and travel animate too. While
+  fishing or mining the character holds the pole or pick from their bags.
+- **Gear on the character.** Equipped armor is composited onto the body texture region by region
+  (ItemDisplayInfo texture components, male/female/unisex), geosets follow the item rules (sleeves,
+  gloves, boots, robe skirts, capes, tabards), most helmets hide the hair, and helmets (per race and
+  sex), shoulders, weapons and shields are attached to the character's M2 attachment points.
+  Item art and game-object models convert on demand (`items/`, `objects/` in the cache).
 
 ### Known gaps
 
 - Lockpicking, pets (hunter/warlock), totems, poisons/imbues and crowd control aren't idleized yet;
   hunters fight in melee until ranged weapons arrive.
 - Profession specializations (Elemental/Dragonscale, Gnomish/Goblin, ...) and their reputations.
-- Helmets, shoulders and weapons aren't attached to models yet; player gear doesn't change the
-  player's look yet (the texture compositor is ready for it).
+- Belts, bracers' own models and enchant glows aren't shown on characters; humanoid NPCs still use
+  their baked body textures (their weapons aren't attached yet).
 - Environment-mapped overlay layers are skipped; global-sequence tracks are held at their first key;
   hermite/bezier keys play linearly.
 - Bags have no slot limit yet.

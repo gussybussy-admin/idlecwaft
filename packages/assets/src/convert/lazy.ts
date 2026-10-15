@@ -8,6 +8,8 @@ import type { Client } from '../client.js';
 import { decodeBLP } from '../blp/blp.js';
 import { encodePNG } from '../img/png.js';
 import { convertCreature } from './creature.js';
+import { convertItemArt, convertItemModel } from './items.js';
+import { convertObject } from './objects.js';
 
 export class LazyArt {
   private failed = new Set<string>();
@@ -40,6 +42,16 @@ export class LazyArt {
     if (m) {
       convertCreature(this.client, Number(m[1]), this.cacheDir);
       return true;
+    }
+    m = rel.match(/^objects\/(\d+)\.glb$/);
+    if (m) return convertObject(this.client, Number(m[1]), this.cacheDir);
+    // Equipped items: items/<display>.json, items/<display>-<left|right>[-<race><M|F>].glb
+    m = rel.match(/^items\/(\d+)\.json$/);
+    if (m) { convertItemArt(this.client, Number(m[1]), this.cacheDir); return true; }
+    m = rel.match(/^items\/(\d+)-(left|right)(?:-(Hu|Or|Dw|Ni|Sc|Ta|Gn|Tr)([MF]))?\.glb$/);
+    if (m) {
+      const race = m[3] ? ({ Hu: 1, Or: 2, Dw: 3, Ni: 4, Sc: 5, Ta: 6, Gn: 7, Tr: 8 } as Record<string, number>)[m[3]] : null;
+      return convertItemModel(this.client, Number(m[1]), m[2] as 'left' | 'right', race, (m[4] as 'M' | 'F') ?? null, this.cacheDir);
     }
     return false;
   }

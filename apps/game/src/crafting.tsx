@@ -5,7 +5,7 @@ import {
   type GameData, type GameState, type Profession, type RecipeDef,
 } from '@idle/sim';
 import { game } from './game.js';
-import { SkillHeader, SKILL_ICON, WorkBar } from './pages.js';
+import { ActionScene, SkillHeader, SKILL_ICON, WorkBar } from './pages.js';
 import { colorClass, Icon, ItemIcon, ItemTooltip, Money, withTip } from './ui.js';
 
 type P = { s: GameState; data: GameData };
@@ -30,6 +30,7 @@ export function CraftPage({ s, data, skill, embedded }: P & { skill: Profession;
   return (
     <>
       {!embedded && <SkillHeader s={s} data={data} skill={skill} />}
+      {!embedded && <ActionScene s={s} data={data} hint="Pick a recipe to make" />}
       <div className="panel">
         <div className="panel-head" style={{ flexWrap: 'wrap' }}>
           <h3>{embedded ? 'Smelting' : 'Recipes'}</h3>
@@ -125,6 +126,7 @@ export function SkinningPage({ s, data }: P) {
   return (
     <>
       <SkillHeader s={s} data={data} skill="skinning" />
+      <ActionScene s={s} data={data} hint="Hunt a beast below; its corpse is skinned after the kill" />
       <div className="panel">
         <p className="muted" style={{ marginTop: 0 }}>Skinning happens on its own: every beast you kill is skinned if your skill is high enough and you carry a Skinning Knife.</p>
         <div className="btn-row" style={{ marginBottom: 12 }}>

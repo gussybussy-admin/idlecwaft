@@ -13,7 +13,7 @@ import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import type { GameData } from '@idle/sim';
 import { Client } from '../../../packages/assets/src/client.js';
-import { convertArt } from '../../../packages/assets/src/convert/art.js';
+import { ART_VERSION, convertArt } from '../../../packages/assets/src/convert/art.js';
 import { LazyArt } from '../../../packages/assets/src/convert/lazy.js';
 import { CLIENT_FILES } from './client-files.js';
 
@@ -91,8 +91,9 @@ async function setup(prev?: Partial<Config>): Promise<Config> {
 }
 
 async function ensureArt(cfg: Config, dataVersion: string): Promise<void> {
+  const want = `${dataVersion}+art${ART_VERSION}`;
   const have = fs.existsSync(versionFile) ? fs.readFileSync(versionFile, 'utf8').trim() : '';
-  if (have === dataVersion && fs.existsSync(path.join(cacheDir, 'character/index.json'))) {
+  if (have === want && fs.existsSync(path.join(cacheDir, 'character/index.json'))) {
     say('Art is up to date.');
     return;
   }
@@ -107,7 +108,7 @@ async function ensureArt(cfg: Config, dataVersion: string): Promise<void> {
   } finally {
     client.close();
   }
-  fs.writeFileSync(versionFile, dataVersion);
+  fs.writeFileSync(versionFile, want);
 }
 
 const TYPES: Record<string, string> = {

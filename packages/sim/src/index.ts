@@ -9,5 +9,6 @@ export * from './spells.js';
 export * from './combat.js';
 export * from './talents.js';
 export * from './quests.js';
+export * from './categories.js';
 export * from './commands.js';
 export * from './protocol.js';

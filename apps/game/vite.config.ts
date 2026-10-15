@@ -49,7 +49,7 @@ function lazyArt(): Plugin {
       let art: InstanceType<typeof LazyArt> | null = null;
       server.middlewares.use((req, res, next) => {
         const rel = decodeURIComponent((req.url ?? '').split('?')[0]).replace(/^\/+/, '');
-        if (!/^(icons\/[\w-]+\.png|creatures\/\d+\.(json|glb))$/i.test(rel) || fs.existsSync(path.join(cacheDir, rel))) return next();
+        if (!/^(icons\/[\w-]+\.png|creatures\/\d+\.(json|glb)|objects\/\d+\.glb|items\/\d+(\.json|-(left|right)(-[a-z]{2}[mf])?\.glb))$/i.test(rel) || fs.existsSync(path.join(cacheDir, rel))) return next();
         try { art ??= new LazyArt(new Client(loadConfig().clientPath), cacheDir); } catch { return next(); }
         const body = art.get(rel);
         if (!body) { res.statusCode = 404; res.end(); return; }

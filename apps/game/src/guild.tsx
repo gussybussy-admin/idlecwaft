@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { SKILL_NAME, type GameData, type GameState, type GuildSnapshot } from '@idle/sim';
 import { game } from './game.js';
-import { fmtTime, ItemIcon, Money } from './ui.js';
+import { fmtTime, ItemIcon, Money, useItemFilter } from './ui.js';
 
 type P = { s: GameState; data: GameData; g: GuildSnapshot };
 
@@ -92,20 +92,23 @@ function Bank({ s, data, g }: P) {
   const have = sel ? (sel.from === 'bank' ? g.bank.find(b => b.item === sel.item)?.count ?? 0 : s.inventory[sel.item] ?? 0) : 0;
   const pick = (from: 'bank' | 'bags', item: number, n: number) => { setSel(sel?.item === item && sel.from === from ? null : { from, item }); setCount(n); };
   const copper = Math.round(parseFloat(gold || '0') * 10000);
+  const { bar, filtered } = useItemFilter(data, [...new Set([...g.bank.map(b => b.item), ...bags.map(([i]) => i)])]);
+  const shown = new Set(filtered);
   return (
     <div className="panel">
       <div className="panel-head"><h3>Guild bank</h3><span className="spacer" /><Money copper={g.gold} /></div>
+      {bar}
       <div className="bank-cols">
         <div>
           <div className="meta" style={{ marginBottom: 6 }}>In the bank</div>
-          <div className="bag">{g.bank.map(b => (
+          <div className="bag">{g.bank.filter(b => shown.has(b.item)).map(b => (
             <div key={b.item} className={`slot ${sel?.from === 'bank' && sel.item === b.item ? 'sel' : ''}`} onClick={() => pick('bank', b.item, b.count)}>
               <ItemIcon id={b.item} data={data} count={b.count} /></div>))}
             {!g.bank.length && <span className="faint">Empty.</span>}</div>
         </div>
         <div>
           <div className="meta" style={{ marginBottom: 6 }}>Your bags</div>
-          <div className="bag">{bags.map(([i, n]) => (
+          <div className="bag">{bags.filter(([i]) => shown.has(i)).map(([i, n]) => (
             <div key={i} className={`slot ${sel?.from === 'bags' && sel.item === i ? 'sel' : ''}`} onClick={() => pick('bags', i, n)}>
               <ItemIcon id={i} data={data} count={n} /></div>))}
             {!bags.length && <span className="faint">Empty.</span>}</div>

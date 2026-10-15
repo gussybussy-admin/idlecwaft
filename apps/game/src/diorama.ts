@@ -3,19 +3,23 @@
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { buildCharacter, type HumanoidSpec, type Look } from './character.js';
+import { buildCharacter, type GearPiece, type HumanoidSpec, type Look } from './character.js';
 
 interface ActorModel {
   root: THREE.Object3D; mixer: THREE.AnimationMixer; clips: Map<string, THREE.AnimationClip>;
   current?: THREE.AnimationAction; base: string; idle?: string;
 }
 
-export type Activity = 'idle' | 'combat' | 'mining' | 'herbalism' | 'fishing' | 'cooking' | 'rest' | 'eat' | 'dead';
+export type Activity = 'idle' | 'combat' | 'mining' | 'herbalism' | 'fishing' | 'cooking' | 'crafting' | 'smithing' | 'enchanting'
+  | 'travel' | 'quest' | 'rest' | 'eat' | 'dead';
 const ACTIVITY_ANIMS: Record<Activity, string[]> = {
   idle: ['Stand'], combat: ['ReadyUnarmed', 'Stand'], mining: ['EmoteWorkNoSheathe', 'EmoteWork', 'Attack1H'],
-  herbalism: ['KneelLoop', 'Loot'], fishing: ['FishingLoop', 'Stand'], cooking: ['UseStandingLoop', 'KneelLoop'],
+  herbalism: ['KneelLoop', 'Loot'], fishing: ['FishingLoop', 'Stand'], cooking: ['KneelLoop', 'UseStandingLoop'],
+  crafting: ['UseStandingLoop', 'KneelLoop'], smithing: ['EmoteWorkNoSheathe', 'EmoteWork', 'Attack1H'],
+  enchanting: ['ChannelCastDirected', 'SpellCastOmni'], travel: ['Run', 'Walk'], quest: ['UseStandingLoop', 'Stand'],
   rest: ['SitGround', 'Stand'], eat: ['EmoteEatNoSheathe', 'EmoteEat', 'SitGround'], dead: ['Death'],
 };
+
 
 const loader = new GLTFLoader();
 const gltfCache = new Map<string, Promise<GLTF | null>>();
@@ -183,12 +187,54 @@ export class Diorama {
     this.frameCamera();
   }
 
+  // ---- props: what the character works at (an ore vein, an anvil, a campfire, water and a bobber)
+  private prop: THREE.Object3D | null = null;
+  private propKey = '';
+  private water: THREE.Mesh | null = null;
+  /** Shows a game object (GameObjectDisplayInfo id) where the mob would stand, plus water for fishing. */
+  async setProp(displayId: number | null, opts: { water?: boolean; scale?: number } = {}) {
+    const key = `${displayId}:${!!opts.water}`;
+    if (key === this.propKey) return;
+    this.propKey = key;
+    if (this.prop) { this.scene.remove(this.prop); this.prop = null; }
+    if (opts.water && !this.water) {
+      const w = new THREE.Mesh(new THREE.CircleGeometry(3.2, 48), new THREE.MeshPhongMaterial({ color: 0x2d5f86, transparent: true, opacity: 0.85, shininess: 80 }));
+      w.rotation.x = -Math.PI / 2;
+      w.position.set(MOB_X + 1.6, 0.02, -0.6);
+      this.water = w;
+      this.scene.add(w);
+    } else if (!opts.water && this.water) { this.scene.remove(this.water); this.water = null; }
+    if (displayId == null) { this.frameCamera(); return; }
+    const g = await loadGLTF(`objects/${displayId}.glb`);
+    if (!g || this.disposed || key !== this.propKey) return;
+    const obj = cloneSkinned(g.scene);
+    obj.traverse(o => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) { m.castShadow = true; m.frustumCulled = false; for (const mat of ([] as THREE.Material[]).concat(m.material)) (mat as THREE.MeshStandardMaterial).alphaTest = 0.5; }
+    });
+    // Fit very large or tiny objects to roughly character size.
+    const size = new THREE.Box3().setFromObject(obj).getSize(new THREE.Vector3());
+    const big = Math.max(size.x, size.y, size.z) || 1;
+    obj.scale.setScalar((opts.scale ?? 1) * (big > 3 ? 2.2 / big : big < 0.4 ? 0.8 / big : 1));
+    // Work props stand within arm's reach of the character; the bobber floats out on the water.
+    obj.position.set(opts.water ? MOB_X + 1.2 : this.playerX + 1.3, opts.water ? 0.05 : 0, opts.water ? -0.4 : 0);
+    this.prop = obj;
+    this.scene.add(obj);
+    this.frameCamera();
+  }
+
+  /** A short "picked something up" kneel (gathering, skinning a corpse). */
+  harvest() {
+    const n = this.first(this.player, ['Loot', 'KneelStart']);
+    if (this.player && n) this.play(this.player, n, false, 0.1);
+  }
+
   private playerKey = '';
-  async setPlayer(look: Look | null) {
-    const key = JSON.stringify(look);
+  async setPlayer(look: Look | null, gear: GearPiece[] = []) {
+    const key = JSON.stringify([look, gear]);
     if (key === this.playerKey) return;
     this.playerKey = key;
-    const built = look ? await buildCharacter({ ...look, bake: null, geosets: {} }) : null;
+    const built = look ? await buildCharacter({ ...look, bake: null, geosets: {}, gear }) : null;
     if (this.disposed || key !== this.playerKey) return;
     if (this.player) { this.scene.remove(this.player.root); this.player = null; }
     const model = built ? this.actorFrom(built.root, built.animations, built.durations, 1) : this.placeholder(0x2a3a5a);
@@ -303,6 +349,7 @@ export class Diorama {
   private frameCamera() {
     const box = new THREE.Box3();
     for (const a of [this.mob, this.player]) if (a) box.expandByObject(a.root);
+    if (this.prop) box.expandByObject(this.prop);
     if (box.isEmpty()) box.set(new THREE.Vector3(-2, 0, -1), new THREE.Vector3(2, 2, 1));
     const size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
     const fitH = size.y / (2 * Math.tan((this.camera.fov * Math.PI) / 360));

@@ -42,7 +42,7 @@ export interface Humanoid {
 
 const texPath = (blp: string) => `character/tex/${blp.replace(/\\/g, '/').replace(/\.blp$/i, '').toLowerCase()}.png`;
 
-function writeTexture(client: Client, cacheDir: string, blp: string): string | null {
+export function writeTexture(client: Client, cacheDir: string, blp: string): string | null {
   const rel = texPath(blp), out = path.join(cacheDir, rel);
   if (fs.existsSync(out)) return rel;
   const buf = client.archives.read(blp);

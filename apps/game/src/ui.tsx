@@ -1,6 +1,6 @@
 // Shared UI pieces: icons, item tooltips, bars, money.
 import { useState, type ReactNode } from 'react';
-import { formatMoney, type GameData, type ItemDef } from '@idle/sim';
+import { formatMoney, itemCategory, ITEM_CATEGORIES, type GameData, type ItemCategory, type ItemDef } from '@idle/sim';
 
 export const iconUrl = (name: string) => `icons/${name.toLowerCase()}.png`;
 
@@ -98,3 +98,44 @@ export const fmtTime = (ms: number) => {
 
 /** Hides the floating tooltip (its element may unmount without a mouseleave, e.g. on page change). */
 export function hideTip(): void { setTip?.(null); }
+
+/**
+ * Search box + category chips for a list of items (bags, vendors, the guild bank). Returns the bar to
+ * render and the matching ids grouped by category, in category order.
+ */
+export function useItemFilter(data: GameData, ids: number[]) {
+  const [q, setQ] = useState('');
+  const [cat, setCat] = useState<ItemCategory | 'All'>('All');
+  const counts = new Map<ItemCategory, number>();
+  const catOf = new Map<number, ItemCategory>();
+  for (const id of ids) {
+    const it = data.items[id];
+    if (!it) continue;
+    const c = itemCategory(data, it);
+    catOf.set(id, c);
+    counts.set(c, (counts.get(c) ?? 0) + 1);
+  }
+  const needle = q.trim().toLowerCase();
+  const filtered = ids.filter(id => catOf.has(id) && (cat === 'All' || catOf.get(id) === cat) && (!needle || data.items[id].name.toLowerCase().includes(needle)));
+  const groups = ITEM_CATEGORIES.map(c => [c, filtered.filter(id => catOf.get(id) === c)] as const).filter(([, l]) => l.length);
+  const active = cat !== 'All' && !counts.has(cat) ? 'All' : cat;
+  const bar = (
+    <div className="filterbar">
+      <input className="text" placeholder="Search items" value={q} onChange={e => setQ(e.target.value)} />
+      <button className={`chip ${active === 'All' ? 'on' : ''}`} onClick={() => setCat('All')}>All {ids.length}</button>
+      {ITEM_CATEGORIES.filter(c => counts.has(c)).map(c => (
+        <button key={c} className={`chip ${active === c ? 'on' : ''}`} onClick={() => setCat(c)}>{c} {counts.get(c)}</button>))}
+    </div>
+  );
+  return { bar, groups, filtered };
+}
+
+/** A plain search box for non-item lists (quests, recipes, spells). */
+export function useSearch(placeholder = 'Search') {
+  const [q, setQ] = useState('');
+  const needle = q.trim().toLowerCase();
+  return {
+    box: <input className="text search" placeholder={placeholder} value={q} onChange={e => setQ(e.target.value)} />,
+    match: (...texts: (string | undefined)[]) => !needle || texts.some(t => t?.toLowerCase().includes(needle)),
+  };
+}

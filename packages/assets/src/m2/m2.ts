@@ -67,6 +67,8 @@ export interface M2Model {
   texCoordLookup: number[]; // 0xffff = sphere/environment mapped
   boneLookup: number[];
   boundingRadius: number;
+  /** Attachment points: 0 shield, 1 right hand, 2 left hand, 5/6 right/left shoulder, 11 helmet, ... */
+  attachments: { id: number; bone: number; pos: Vec3 }[];
 }
 
 export function parseM2(buf: Buffer): M2Model {
@@ -159,6 +161,8 @@ export function parseM2(buf: Buffer): M2Model {
     textureLookup: u16s(0x94),
     texCoordLookup: u16s(0x9c),
     boundingRadius: buf.readFloatLE(0xcc),
+    // v256 attachment: id, bone, unknown, position, animate-attached track (28 bytes)
+    attachments: list(0x104, 48, p => ({ id: buf.readUInt32LE(p), bone: buf.readUInt16LE(p + 4), pos: vec3(p + 8) })),
   };
 }
 

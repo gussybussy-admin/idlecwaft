@@ -4,7 +4,30 @@ import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 export interface Look { race: number; sex: number; skin: number; face: number; hairStyle: number; hairColor: number; facialHair: number }
-export interface HumanoidSpec extends Look { bake: string | null; geosets: Record<number, number> }
+/** An equipped item to show: its ItemDisplayInfo id and inventory type (which decides where it goes). */
+export interface GearPiece { displayId: number; invType: number; slot: string }
+export interface HumanoidSpec extends Look { bake: string | null; geosets: Record<number, number>; gear?: GearPiece[] }
+
+/** items/<display>.json from the converter (packages/assets/src/convert/items.ts). */
+interface ItemArt {
+  geosets: [number, number, number]; helmHide: [number, number];
+  textures: Partial<Record<keyof typeof GEAR_REGION, { m?: string; f?: string; u?: string }>>;
+  left?: string; right?: string; cape?: string;
+}
+// Where armor texture pieces go on the 256x256 body texture.
+const GEAR_REGION = {
+  armUpper: [0, 0, 128, 64], armLower: [0, 64, 128, 64], hand: [0, 128, 128, 32],
+  torsoUpper: [128, 0, 128, 64], torsoLower: [128, 64, 128, 32], legUpper: [128, 96, 128, 64],
+  legLower: [128, 160, 128, 64], foot: [128, 224, 128, 32],
+} as const;
+// Inventory types, in the order their textures are layered (later covers earlier), as the game does.
+const LAYER_ORDER = [4, 7, 8, 5, 20, 9, 10, 6, 19];
+const RACE_CODES: Record<number, string> = { 1: 'Hu', 2: 'Or', 3: 'Dw', 4: 'Ni', 5: 'Sc', 6: 'Ta', 7: 'Gn', 8: 'Tr' };
+const itemArtCache = new Map<number, Promise<ItemArt | null>>();
+const itemArt = (id: number) => {
+  if (!itemArtCache.has(id)) itemArtCache.set(id, fetch(`items/${id}.json`).then(r => (r.ok ? r.json() as Promise<ItemArt> : null)).catch(() => null));
+  return itemArtCache.get(id)!;
+};
 
 interface CharSection { race: number; sex: number; type: number; variation: number; color: number; tex: string[] }
 interface CharacterIndex {
@@ -67,15 +90,33 @@ export async function buildCharacter(spec: HumanoidSpec): Promise<BuiltCharacter
   const hairGeo = idx.hair.find(h => h.race === spec.race && h.sex === spec.sex && h.variation === spec.hairStyle);
   const facial = idx.facial.find(f => f.race === spec.race && f.sex === spec.sex && f.variation === spec.facialHair);
 
+  // ---- equipped gear: geosets from each piece's rules (sleeves, gloves, boots, robe, cape)
+  const gear = await Promise.all((spec.gear ?? []).map(async g => ({ ...g, art: await itemArt(g.displayId) })));
+  const geosets = { ...spec.geosets };
+  let helmed = false, cape: string | undefined;
+  for (const { invType, art } of gear) {
+    if (!art) continue;
+    const [g1, , g3] = art.geosets;
+    if (invType === 10) geosets[4] = 401 + g1;                           // gloves
+    else if (invType === 8) geosets[5] = 501 + g1;                       // boots
+    else if (invType === 4 || invType === 5 || invType === 20) {         // shirt, chest, robe: sleeves
+      geosets[8] = 801 + g1;
+      if (g3) geosets[13] = 1301 + g3;                                   // robe skirt
+    } else if (invType === 7) { geosets[9] = 901 + g1; if (g3) geosets[13] = 1301 + g3; }
+    else if (invType === 19) geosets[12] = 1202;                         // tabard
+    else if (invType === 16 && art.cape) { geosets[15] = 1502 + g1; cape = art.cape; }
+    else if (invType === 1 && art.helmHide[spec.sex]) helmed = true;
+  }
+
   // ---- geosets
   const want = (id: number): boolean => {
     if (id === 0) return true;
     const group = Math.floor(id / 100);
-    if (group === 0) return id === (hairGeo?.geoset || 1);
+    if (group === 0) return !helmed && id === (hairGeo?.geoset || 1); // most helmets hide the hair
     if (group === 1) return id === 100 + (facial?.g1 ?? 1);
     if (group === 2) return id === 200 + (facial?.g2 ?? 1);
     if (group === 3) return id === 300 + (facial?.g3 ?? 1);
-    return id === (spec.geosets[group] ?? DEFAULT_GEOSETS[group]);
+    return id === (geosets[group] ?? DEFAULT_GEOSETS[group]);
   };
   root.traverse(o => {
     const ids = (o.userData as { submeshIds?: number[] }).submeshIds;
@@ -110,12 +151,25 @@ export async function buildCharacter(spec: HumanoidSpec): Promise<BuiltCharacter
       ?? idx.sections.find(s => s.race === spec.race && s.sex === spec.sex && s.type === UNDERWEAR);
     await draw(under?.tex[0], REGION.legUpper); await draw(under?.tex[1], REGION.torsoUpper);
   }
+  // Armor texture pieces, layered shirt → legs → boots → chest → wrists → gloves → belt → tabard.
+  const sexKey = spec.sex === 0 ? 'm' : 'f';
+  for (const inv of LAYER_ORDER) {
+    for (const { art } of gear.filter(g => g.invType === inv)) {
+      for (const [region, t] of Object.entries(art?.textures ?? {})) {
+        const file = t?.[sexKey] ?? t?.u;
+        if (file) await draw(file, GEAR_REGION[region as keyof typeof GEAR_REGION]);
+      }
+    }
+  }
   const skinTex = new THREE.CanvasTexture(canvas);
   skinTex.flipY = false; // glTF UV convention
   skinTex.colorSpace = THREE.SRGBColorSpace;
   const hairImg = hairSec?.tex[0] ? await loadImage(hairSec.tex[0]) : null;
   let hairTex: THREE.Texture = skinTex;
   if (hairImg) { hairTex = new THREE.Texture(hairImg); hairTex.flipY = false; hairTex.colorSpace = THREE.SRGBColorSpace; hairTex.needsUpdate = true; }
+  const capeImg = cape ? await loadImage(cape) : null;
+  let capeTex: THREE.Texture | null = null;
+  if (capeImg) { capeTex = new THREE.Texture(capeImg); capeTex.flipY = false; capeTex.colorSpace = THREE.SRGBColorSpace; capeTex.needsUpdate = true; }
 
   root.traverse(o => {
     const m = o as THREE.Mesh;
@@ -127,11 +181,35 @@ export async function buildCharacter(spec: HumanoidSpec): Promise<BuiltCharacter
       const c = (mat as THREE.MeshStandardMaterial).clone(); // per-character: materials are shared by the glTF
       if (type === 1 || type === 8) c.map = skinTex;
       else if (type === 6) { c.map = hairTex; c.alphaTest = 0.5; c.transparent = false; }
+      else if (type === 2 && capeTex) { c.map = capeTex; c.side = THREE.DoubleSide; }
       c.needsUpdate = true;
       return c;
     };
     m.material = Array.isArray(m.material) ? m.material.map(paint) : paint(m.material);
   });
+
+  // ---- attached models: helmet, shoulders, weapons, shield (character attachment points)
+  const raceSex = `${RACE_CODES[spec.race] ?? 'Hu'}${spec.sex === 0 ? 'M' : 'F'}`;
+  const attach = async (url: string, point: number) => {
+    const node = root.getObjectByName(`attach${point}`);
+    const g = node ? await loadGLTF(url).catch(() => null) : null;
+    if (!node || !g) return;
+    const model = cloneSkinned(g.scene);
+    // The item's own root turns WoW Z-up into Y-up; the attachment point is already in WoW space.
+    model.getObjectByName('root')?.quaternion.identity();
+    model.traverse(o => { const m = o as THREE.Mesh; if (m.isMesh) { m.castShadow = true; m.frustumCulled = false; } });
+    node.add(model);
+  };
+  await Promise.all(gear.flatMap(({ displayId, invType, slot, art }) => {
+    if (!art) return [];
+    const url = (side: 'left' | 'right', perRace = false) => `items/${displayId}-${side}${perRace ? `-${raceSex}` : ''}.glb`;
+    if (invType === 1 && art.left) return [attach(url('left', true), 11)];
+    if (invType === 3) return [art.left && attach(url('left'), 6), art.right && attach(url('right'), 5)].filter(Boolean) as Promise<void>[];
+    if (invType === 14 && art.left) return [attach(url('left'), 0)];                    // shield
+    if (art.left && slot === 'mainhand') return [attach(url('left'), 1)];                // right hand
+    if (art.left && slot === 'offhand') return [attach(url('left'), 2)];                 // left hand
+    return [];
+  }));
 
   const defs = (gltf.parser.json.animations ?? []) as { extras?: { durationS?: number } }[];
   return { root, animations: gltf.animations, durations: defs.map(d => d.extras?.durationS) };

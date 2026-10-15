@@ -9,7 +9,7 @@ import { Diorama, type Activity } from './diorama.js';
 import { topDrops } from './loot-preview.js';
 import { PowerBar } from './spells.js';
 import { CraftPage } from './crafting.js';
-import { Bar, colorClass, fmtTime, Icon, ItemIcon, ItemTooltip, Money, withTip } from './ui.js';
+import { Bar, colorClass, fmtTime, Icon, ItemIcon, ItemTooltip, Money, useItemFilter, withTip } from './ui.js';
 
 type P = { s: GameState; data: GameData };
 const RANKS = ['Normal', 'Elite', 'Rare Elite', 'Boss', 'Rare'];
@@ -31,7 +31,7 @@ export function CombatPage({ s, data }: P) {
     <>
       <div className="panel-head"><h2>{zone.name}</h2><span className="muted">Levels {zone.levelMin}-{zone.levelMax}</span><span className="spacer" />
         {s.action && <button className="btn secondary" onClick={() => game.command({ name: 'stop' })}>Stop</button>}</div>
-      <CombatScene s={s} data={data} />
+      <ActionScene s={s} data={data} hint="Pick a creature to fight" />
       <div className="panel">
         <div className="panel-head"><h3>Creatures</h3><span className="spacer" />
           <label className="muted" style={{ fontSize: 12 }}><input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} /> Show all levels</label></div>
@@ -73,7 +73,15 @@ export function CombatPage({ s, data }: P) {
 
 interface Floater { id: number; x: number; y: number; text: string; cls: string }
 
-function CombatScene({ s, data }: P) {
+/** Workstations shown while crafting (GameObjectDisplayInfo ids from the client). */
+const STATION: Partial<Record<Profession, number>> = {
+  cooking: 192, blacksmithing: 273, mining: 233, alchemy: 3491, engineering: 2029, enchanting: 4391,
+  tailoring: 113, leatherworking: 113, firstaid: 113,
+};
+const FISHING_BOBBER = 668;
+
+/** The 3D scene for whatever the character is doing: fighting, gathering, fishing, crafting, travelling. */
+export function ActionScene({ s, data, hint }: P & { hint?: string }) {
   const host = useRef<HTMLDivElement>(null);
   const dio = useRef<Diorama | null>(null);
   const [floaters, setFloaters] = useState<Floater[]>([]);
@@ -102,32 +110,65 @@ function CombatScene({ s, data }: P) {
         case 'kill': d.die('mob'); break;
         case 'death': d.die('player'); d.setActivity('dead'); break;
         case 'revive': d.revive(); break;
+        case 'harvest':
+          if (e.skill === 'skinning' || e.skill === 'mining' || e.skill === 'herbalism') d.harvest();
+          for (const [i, n] of e.items.slice(0, 2)) float('player', `+${n} ${data.items[i]?.name ?? ''}`, 'loot', 'player');
+          break;
       }
     });
     return () => { off(); d.dispose(); dio.current = null; };
   }, []);
 
-  const ph = s.phase;
+  const ph = s.phase, a = s.action;
   const mob = ph.p === 'combat' ? ph.mob : null;
-  const def = mob ? data.creatures[mob.id] : s.action?.kind === 'fight' ? data.creatures[s.action.creature] : null;
+  const def = mob ? data.creatures[mob.id] : a?.kind === 'fight' ? data.creatures[a.creature] : null;
   // Mounting mid-fight (or after a reload): show the current mob without waiting for the next spawn.
   // Later spawns arrive as events, so this runs once.
   useEffect(() => { if (mob && def) dio.current?.setMob(def.displayIds, 0); }, []);
+  useEffect(() => { if (a?.kind !== 'fight') dio.current?.setMob(null); }, [a?.kind]);
 
   const look = s.char.look ?? { sex: 0, skin: 0, face: 0, hairStyle: 0, hairColor: 0, facialHair: 0 };
-  useEffect(() => { dio.current?.setPlayer({ race: s.char.race, ...look }); }, [s.char.race, JSON.stringify(look)]);
+  // While fishing or mining the character holds the pole or pick from their bags instead of weapons.
+  const toolKind = a?.kind === 'fish' ? 'fishing-pole' : a?.kind === 'gather' && data.nodes[a.node]?.skill === 'mining' ? 'mining-pick' : null;
+  const tool = toolKind ? [...SLOTS.map(sl => s.equipment[sl]), ...Object.keys(s.inventory).map(Number)]
+    .map(id => (id ? data.items[id] : undefined)).find(it => it?.tool === toolKind && it.displayId) : undefined;
+  const gear = SLOTS.flatMap(slot => {
+    if (tool && (slot === 'mainhand' || slot === 'offhand')) return [];
+    const it = s.equipment[slot] ? data.items[s.equipment[slot]!] : undefined;
+    return it?.displayId ? [{ displayId: it.displayId, invType: it.invType, slot }] : [];
+  });
+  if (tool) gear.push({ displayId: tool.displayId, invType: tool.invType, slot: 'mainhand' });
+  useEffect(() => { dio.current?.setPlayer({ race: s.char.race, ...look }, gear); }, [s.char.race, JSON.stringify(look), JSON.stringify(gear)]);
+
+  const recipe = a?.kind === 'craft' ? data.recipes[a.recipe] : undefined;
+  const node = a?.kind === 'gather' ? data.nodes[a.node] : undefined;
+  const prop = node ? node.displayId : a?.kind === 'fish' ? FISHING_BOBBER : recipe ? STATION[recipe.skill] ?? null : null;
+  useEffect(() => { dio.current?.setProp(prop ?? null, { water: a?.kind === 'fish' }); }, [prop, a?.kind]);
+
   const activity: Activity = ph.p === 'dead' ? 'dead'
     : ph.p === 'rest' ? (ph.eating ? 'eat' : 'rest')
-    : s.action?.kind === 'fight' ? 'combat'
-    : s.action?.kind === 'gather' ? (data.nodes[s.action.node]?.skill ?? 'mining')
-    : s.action?.kind === 'fish' ? 'fishing' : s.action?.kind === 'craft' ? 'cooking' : 'idle';
+    : !a ? 'idle'
+    : a.kind === 'fight' ? 'combat'
+    : a.kind === 'gather' ? (node?.skill ?? 'mining')
+    : a.kind === 'fish' ? 'fishing'
+    : a.kind === 'travel' ? 'travel'
+    : a.kind === 'quest' ? 'quest'
+    : recipe?.skill === 'cooking' ? 'cooking'
+    : recipe?.skill === 'blacksmithing' || recipe?.skill === 'mining' ? 'smithing'
+    : recipe?.skill === 'enchanting' ? 'enchanting' : 'crafting';
   useEffect(() => { dio.current?.setActivity(activity); }, [activity]);
 
   const st = playerStats(s, data);
+  const until = ph.p === 'work' ? ph.until : null;
   const banner = ph.p === 'search' ? 'Searching for a target…'
-    : ph.p === 'rest' ? (ph.eating ? `Eating ${data.items[ph.eating.item]?.name}…` : 'Resting…')
+    : ph.p === 'rest' ? (ph.eating ? `Eating ${data.items[ph.eating.item]?.name}…` : 'Resting… (no food: 1 HP per minute)')
     : ph.p === 'dead' ? `You are dead. Resurrecting in ${fmtTime(ph.until - Date.now())}`
-    : !s.action ? 'Pick a creature to fight' : '';
+    : a?.kind === 'gather' && node ? `${node.skill === 'mining' ? 'Mining' : 'Gathering'} ${node.name}…`
+    : a?.kind === 'fish' ? 'Fishing…'
+    : a?.kind === 'craft' && recipe ? `${recipe.skill === 'cooking' ? 'Cooking' : 'Making'} ${recipe.name}…`
+    : a?.kind === 'travel' ? `Travelling to ${data.zones.find(z => z.id === a.to)?.name}${until ? ` · ${fmtTime(Math.max(0, until - Date.now()))} left` : ''}`
+    : a?.kind === 'quest' ? `${data.quests[a.quest]?.task?.label ?? 'Questing'}…`
+    : !a ? (hint ?? 'Idle') : '';
   return (
     <div className="diorama" ref={host}>
       <div className="hud">
@@ -159,6 +200,7 @@ export function GatherPage({ s, data, skill }: P & { skill: 'mining' | 'herbalis
   return (
     <>
       <SkillHeader s={s} data={data} skill={skill} />
+      <ActionScene s={s} data={data} hint={skill === 'mining' ? 'Pick a vein to mine' : 'Pick an herb to gather'} />
       <div className="grid">
         {nodes.map(({ id, spawns }) => {
           const n = data.nodes[id];
@@ -201,6 +243,7 @@ export function FishingPage({ s, data }: P) {
   return (
     <>
       <SkillHeader s={s} data={data} skill="fishing" />
+      <ActionScene s={s} data={data} hint="Cast a line below" />
       {f ? (
         <div className={`card ${active ? 'current' : ''}`} style={{ maxWidth: 560 }}>
           <div className="row"><Icon name="Trade_Fishing" size="lg" /><div>
@@ -326,13 +369,23 @@ export function BagsPanel({ s, data }: P) {
   const it = sel !== null ? data.items[sel] : null;
   const count = sel !== null ? s.inventory[sel] ?? 0 : 0;
   const junkValue = items.filter(([id]) => data.items[id].quality === 0).reduce((a, [id, n]) => a + data.items[id].sellPrice * n, 0);
+  const { bar, groups } = useItemFilter(data, items.map(([id]) => id));
   return (
     <div className="panel">
       <div className="panel-head"><h3>Bags</h3><span className="muted">{items.length} item types</span><span className="spacer" />
         {junkValue > 0 && <button className="btn secondary small" onClick={() => game.command({ name: 'sellJunk' })}>Sell junk (<Money copper={junkValue} />)</button>}</div>
-      <div className="bag">{items.map(([id, n]) => (
-        <div key={id} className={`slot ${sel === id ? 'sel' : ''}`} onClick={() => setSel(sel === id ? null : id)}><ItemIcon id={id} data={data} count={n} /></div>
-      ))}{!items.length && <span className="muted">Your bags are empty.</span>}</div>
+      {items.length > 0 && bar}
+      {groups.map(([cat, ids]) => (
+        <div key={cat}>
+          <div className="cat-head">{cat}</div>
+          <div className="bag">{ids.map(id => (
+            <div key={id} className={`slot ${sel === id ? 'sel' : ''}`} onClick={() => setSel(sel === id ? null : id)}
+              {...withTip(() => <ItemTooltip item={data.items[id]} data={data} count={s.inventory[id]} />)}>
+              <ItemIcon id={id} data={data} count={s.inventory[id]} /></div>))}</div>
+        </div>
+      ))}
+      {!items.length && <span className="muted">Your bags are empty.</span>}
+      {items.length > 0 && !groups.length && <span className="muted">Nothing matches.</span>}
       {it && count > 0 && (
         <div className="card" style={{ marginTop: 12, maxWidth: 520 }}>
           <div className="row"><ItemIcon id={it.id} data={data} size="lg" /><div><div className={`title q${it.quality}`}>{it.name}</div><div className="meta">You have {count}</div></div></div>
@@ -351,17 +404,11 @@ export function BagsPanel({ s, data }: P) {
 
 export function TownPage({ s, data }: P) {
   const zone = data.zones.find(z => z.id === s.zone)!;
-  const [filter, setFilter] = useState<'useful' | 'all'>('useful');
-  const useful = (id: number) => {
-    const it = data.items[id];
-    if (!it) return false;
-    if (it.tool || it.food) return true;
-    return Object.values(data.recipes).some(r => r.reagents.some(([i]) => i === id));
-  };
   const faction = factionOfRace(data, s.char.race);
   const seen = new Set<number>();
-  const items = zone.vendorItems.filter(v => data.items[v.item] && v.factions.includes(faction) && !seen.has(v.item) && seen.add(v.item)
-    && (filter === 'all' || useful(v.item)));
+  const offers = zone.vendorItems.filter(v => data.items[v.item] && v.factions.includes(faction) && !seen.has(v.item) && seen.add(v.item));
+  const vendorOf = new Map(offers.map(v => [v.item, v.vendor]));
+  const { bar, groups } = useItemFilter(data, offers.map(v => v.item));
   return (
     <>
       <div className="panel-head"><h2>Trainers & Vendors</h2><span className="muted">{zone.name}</span></div>
@@ -386,21 +433,25 @@ export function TownPage({ s, data }: P) {
         </div>
       </div>
       <div className="panel">
-        <div className="panel-head"><h3>Vendors</h3><span className="spacer" />
-          <button className={`choice ${filter === 'useful' ? 'on' : ''}`} onClick={() => setFilter('useful')}>Useful</button>
-          <button className={`choice ${filter === 'all' ? 'on' : ''}`} onClick={() => setFilter('all')}>All</button></div>
-        <div className="grid">
-          {items.map(({ item, vendor }) => {
-            const it = data.items[item];
-            return (
-              <div key={item} className="card">
-                <div className="row"><ItemIcon id={item} data={data} /><div style={{ minWidth: 0 }}><div className={`title q${it.quality}`}>{it.name}</div><div className="meta">{vendor}{it.reqRep && data.factions[it.reqRep[0]] ? ` · needs ${REP_RANKS[it.reqRep[1]]} with ${data.factions[it.reqRep[0]].name}` : ''}</div></div></div>
-                <div className="btn-row"><button className="btn secondary small" onClick={() => game.command({ name: 'buy', item, count: 1 })}>Buy <Money copper={it.buyPrice} /></button>
-                  {it.stack > 1 && <button className="btn secondary small" onClick={() => game.command({ name: 'buy', item, count: 5 })}>x5 <Money copper={it.buyPrice * 5} /></button>}</div>
-              </div>
-            );
-          })}
-        </div>
+        <div className="panel-head"><h3>Vendors</h3><span className="muted">{offers.length} items for sale in {zone.name}</span></div>
+        {offers.length ? bar : <p className="muted" style={{ margin: 0 }}>No vendor here will trade with you.</p>}
+        {groups.map(([cat, ids]) => (
+          <div key={cat}>
+            <div className="cat-head">{cat}</div>
+            <div className="grid">
+              {ids.map(item => {
+                const it = data.items[item];
+                return (
+                  <div key={item} className="card">
+                    <div className="row"><span {...withTip(() => <ItemTooltip item={it} data={data} />)}><ItemIcon id={item} data={data} /></span><div style={{ minWidth: 0 }}><div className={`title q${it.quality}`}>{it.name}</div><div className="meta">{vendorOf.get(item)}{it.reqRep && data.factions[it.reqRep[0]] ? ` · needs ${REP_RANKS[it.reqRep[1]]} with ${data.factions[it.reqRep[0]].name}` : ''}</div></div></div>
+                    <div className="btn-row"><button className="btn secondary small" onClick={() => game.command({ name: 'buy', item, count: 1 })}>Buy <Money copper={it.buyPrice} /></button>
+                      {it.stack > 1 && <button className="btn secondary small" onClick={() => game.command({ name: 'buy', item, count: 5 })}>x5 <Money copper={it.buyPrice * 5} /></button>}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
     </>
   );
