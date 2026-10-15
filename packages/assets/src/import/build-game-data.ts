@@ -5,22 +5,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
-  CreatureDef, Faction, GameData, ItemDef, NodeDef, RecipeDef, SkillRank, TaxiNode, TaxiPath, ZoneDef,
+  CreatureDef, Faction, GameData, ItemDef, NodeDef, TaxiNode, TaxiPath, ZoneDef,
 } from '@idle/sim';
 import type { Client } from '../client.js';
 import { ZoneLookup } from './zone-lookup.js';
 import { PATCH_1_12, VMangos, type Row } from './vmangos.js';
 import { buildClassSpells } from './class-spells.js';
 import { buildTalents } from './talents.js';
+import { buildEnchants, buildRecipes, buildSkillRanks } from './professions.js';
 
-const SKILL_COOKING = 185;
 const LOCKTYPE_HERBALISM = 2, LOCKTYPE_MINING = 3, LOCK_KEY_SKILL = 2;
 const GO_TYPE_CHEST = 3;
 const NPC_FLAG_VENDOR = 0x4;
 const CREATURE_TYPE_CRITTER = 8, CREATURE_TYPE_NOT_SPECIFIED = 10;
 // Food / drink auras: MOD_REGEN / MOD_POWER_REGEN restore (basePoints + 1) every 5 seconds.
 const AURA_MOD_REGEN = 84, AURA_MOD_POWER_REGEN = 85, REGEN_TICK_MS = 5000;
-const SLA_LEARNED_WITH_SKILL = 1;
+const AURA_PERIODIC_HEAL = 8, EFFECT_HEAL = 10, EFFECT_ENERGIZE = 30;
+// Profession tools: skinning knife, blacksmith hammer, arclight spanner, and the runed enchanting rods.
+const TOOLS = [2901, 6256, 7005, 5956, 6219, 6218, 6339, 11130, 11145, 16207];
 
 // Faction.dbc ids of the playable factions and their capitals, per side.
 const PLAYER_FACTIONS: Record<Faction, Set<number>> = {
@@ -32,16 +34,6 @@ const GROUP_BIT: Record<Faction, number> = { alliance: 0x2, horde: 0x4 }; // Fac
 const START_ZONES: Record<number, number> = { 1: 12, 2: 14, 3: 1, 4: 141, 5: 85, 6: 215, 7: 1, 8: 14 };
 const CITIES = new Set([1519, 1537, 1657, 1637, 1638, 1497]);
 const EXCLUDED_ZONES = new Set([876, 616]); // GM Island, Hyjal (unfinished in vanilla)
-
-// Profession rank spells (Apprentice, Journeyman, Expert, Artisan). Costs/levels come from trainer data.
-const RANK_SPELLS: Record<keyof GameData['skillRanks'], number[]> = {
-  mining: [2575, 2576, 3564, 10248],
-  herbalism: [2366, 2368, 3570, 11993],
-  fishing: [7620, 7731, 7732, 18248],
-  cooking: [2550, 3102, 3413, 18260],
-};
-const RANK_NAMES = ['Apprentice', 'Journeyman', 'Expert', 'Artisan'];
-const RANK_LEVELS = [5, 10, 20, 35];
 
 /** `zones` empty = every zone on both continents. */
 export interface BuildOptions { zones: number[]; cacheDir: string; repoRoot: string; log?: (s: string) => void }
@@ -222,37 +214,16 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
   }
   log(`flight paths: ${Object.keys(taxiNodes).length} nodes, ${taxiPaths.length} routes`);
 
-  // ---- cooking recipes: thresholds from SkillLineAbility.dbc, reagents/products from spell data
-  const sla = client.dbc('SkillLineAbility'); // 1 skill, 2 spell, 7 minRank, 9 acquire, 10 grey (trivial high), 11 yellow (trivial low)
-  const obtainable = new Set(items);
-  const recipes: Record<number, RecipeDef> = {};
-  for (const r of sla.rows()) {
-    if (sla.u32(r, 1) !== SKILL_COOKING || !sla.u32(r, 10)) continue;
-    const spellId = sla.u32(r, 2);
-    const s = vm.spell(spellId);
-    if (!s || Number(s.effect1) !== 24 || !Number(s.effectItemType1)) continue; // SPELL_EFFECT_CREATE_ITEM
-    const reagents: [number, number][] = [];
-    for (let i = 1; i <= 8; i++) if (Number(s[`reagent${i}`])) reagents.push([Number(s[`reagent${i}`]), Number(s[`reagentCount${i}`])]);
-    if (!reagents.every(([id]) => obtainable.has(id))) continue; // only what the world can supply
-    const learnedWithSkill = sla.u32(r, 9) === SLA_LEARNED_WITH_SKILL;
-    const trainer = learnedWithSkill ? { cost: 0, reqSkill: sla.u32(r, 7), reqLevel: 0 } : vm.trainerOffer(spellId);
-    const recipeItem = vm.recipeItem(spellId);
-    if (!trainer && !(recipeItem && obtainable.has(Number(recipeItem.entry)))) continue;
-    const grey = sla.u32(r, 10), yellow = sla.u32(r, 11);
-    const orange = (trainer ? trainer.reqSkill : Number(recipeItem?.required_skill_rank)) || 1;
-    recipes[spellId] = {
-      spellId, name: String(s.name), skill: 'cooking', item: Number(s.effectItemType1),
-      count: Math.max(1, Number(s.effectBasePoints1) + 1), reagents,
-      orange, yellow, green: Math.floor((yellow + grey) / 2), grey,
-      castMs: castTimes.get(Number(s.castingTimeIndex)) ?? 3000,
-      source: trainer ? { trainer: trainer.cost } : { recipeItem: Number(recipeItem!.entry) },
-    };
-    items.add(Number(s.effectItemType1));
-    for (const [id] of reagents) items.add(id);
+  // ---- disenchanting results of everything seen so far (the dusts and essences enchanters work with)
+  for (const id of [...items]) {
+    const t = vm.cachedItem(id);
+    if (t && Number(t.disenchant_id) && Number(t.quality) >= 2) vm.loot('disenchant_loot_template', Number(t.disenchant_id), items);
   }
-
-  // ---- tools always available
-  for (const id of [2901, 6256]) items.add(id); // Mining Pick, Fishing Pole
+  // ---- recipes for every profession, then the enchantments they apply
+  for (const id of TOOLS) items.add(id);
+  const recipes = buildRecipes(client, vm, castTimes, items);
+  const enchants = buildEnchants(client, vm, new Set(Object.values(recipes).flatMap(r => (r.enchant ? [r.enchant.id] : []))));
+  log(`recipes: ${Object.keys(recipes).length}, enchantments: ${Object.keys(enchants).length}`);
 
   // ---- items
   const itemDefs: Record<number, ItemDef> = {};
@@ -295,14 +266,7 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
     (classStatsOut[Number(r.class)] ??= [])[Number(r.level)] = [Number(r.basehp), Number(r.basemana)];
   }
 
-  // ---- profession ranks from trainer data
-  const skillRanks = {} as GameData['skillRanks'];
-  for (const [skill, spells] of Object.entries(RANK_SPELLS) as [keyof GameData['skillRanks'], number[]][]) {
-    skillRanks[skill] = spells.map((spellId, i): SkillRank => {
-      const t = vm.trainerOffer(spellId);
-      return { name: RANK_NAMES[i], max: 75 * (i + 1), reqLevel: t?.reqLevel || RANK_LEVELS[i], cost: t?.cost ?? 0, spellId };
-    });
-  }
+  const skillRanks = buildSkillRanks(vm);
 
   // ---- class spells, and where each class's trainers are
   const { spells, classSpells } = buildClassSpells(client, vm, castTimes, durations);
@@ -332,7 +296,7 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
     classes: classes.rows().map(r => ({ id: classes.u32(r, 0), name: classes.str(r, 5) })),
     raceClasses, startZones, classSkills, skillNames, spells, classSpells, classTrainerZones, talents, talentTabs,
     levelStats, classStats: classStatsOut, skillRanks,
-    zones, creatures, items: itemDefs, nodes, recipes, loot, taxiNodes, taxiPaths,
+    zones, creatures, items: itemDefs, nodes, recipes, enchants, loot, taxiNodes, taxiPaths,
   };
   const out = path.join(opts.cacheDir, 'data');
   fs.mkdirSync(out, { recursive: true });
@@ -380,6 +344,7 @@ function creatureDef(t: Row, classStats: Map<string, Row>, vm: VMangos, items: S
     levelMin, levelMax, rank: Number(t.rank), type: Number(t.type), displayIds, attackMs, stats,
     goldMin: Number(t.gold_min), goldMax: Number(t.gold_max),
     loot: vm.loot('creature_loot_template', Number(t.loot_id), items),
+    ...(Number(t.skinning_loot_id) ? { skin: vm.loot('skinning_loot_template', Number(t.skinning_loot_id), items) ?? undefined } : {}),
     hostile,
   };
 }
@@ -394,24 +359,36 @@ function itemDef(t: Row, icons: Map<number, string>, vm: VMangos, durations: Map
     reqLevel: Number(t.required_level), sellPrice: Number(t.sell_price), buyPrice: Number(t.buy_price),
     stack: Number(t.stackable) || 1, armor: Number(t.armor),
     dmgMin: Number(t.dmg_min1), dmgMax: Number(t.dmg_max1), delayMs: Number(t.delay), stats,
+    itemLevel: Number(t.item_level),
   };
+  if (Number(t.disenchant_id) && def.quality >= 2) {
+    const key = `de:${Number(t.disenchant_id)}`;
+    if (vm.tables[key]) def.disenchant = key;
+  }
   // Food and drink: an on-use aura that restores health/mana per tick over the aura duration.
   const spellId = Number(t.spellid_1);
   if (spellId && Number(t.spelltrigger_1) === 0) {
     const s = vm.spell(spellId);
     if (s) {
       const durationMs = durations.get(Number(s.durationIndex)) ?? 0;
-      let heal = 0, mana = 0;
+      let heal = 0, mana = 0, potHeal = 0, potMana = 0;
       for (let e = 1; e <= 3; e++) {
-        const aura = Number(s[`effectApplyAuraName${e}`]);
-        const total = Math.round((Number(s[`effectBasePoints${e}`]) + 1) * durationMs / REGEN_TICK_MS);
+        const effect = Number(s[`effect${e}`]), aura = Number(s[`effectApplyAuraName${e}`]);
+        const bp = Number(s[`effectBasePoints${e}`]), avg = bp + 1 + Math.max(0, Number(s[`effectDieSides${e}`]) - 1) / 2;
+        const total = Math.round((bp + 1) * durationMs / REGEN_TICK_MS);
         if (aura === AURA_MOD_REGEN) heal += total;
         if (aura === AURA_MOD_POWER_REGEN) mana += total;
+        // Bandages: a channeled heal-over-time; idle, they work like food that only heals.
+        if (aura === AURA_PERIODIC_HEAL && def.class === 0) heal += Math.round((bp + 1) * durationMs / (Number(s[`effectAmplitude${e}`]) || 1000));
+        if (effect === EFFECT_HEAL) potHeal += Math.round(avg);
+        if (effect === EFFECT_ENERGIZE && Number(s[`effectMiscValue${e}`]) === 0) potMana += Math.round(avg);
       }
       if (heal || mana) def.food = { heal, mana, durationMs };
+      if ((potHeal || potMana) && def.class === 0) def.potion = { heal: potHeal, mana: potMana };
     }
   }
   if (def.id === 2901) def.tool = 'mining-pick';
   if (def.class === 2 && def.subclass === 20) def.tool = 'fishing-pole';
+  if (def.id === 7005) def.tool = 'skinning-knife';
   return def;
 }

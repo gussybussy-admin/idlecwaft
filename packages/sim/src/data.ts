@@ -3,6 +3,7 @@
 
 import type { ClassSpellOffer, SpellDef } from './spells.js';
 import type { TalentDef, TalentTabDef } from './talents.js';
+import type { Profession } from './state.js';
 
 export type ItemId = number;
 export type Copper = number;
@@ -44,6 +45,18 @@ export interface ItemDef {
   food?: { heal: number; mana: number; durationMs: number };
   /** Tool category this item satisfies, if any (e.g. "mining-pick", "fishing-pole"). */
   tool?: string;
+  itemLevel?: number;
+  /** What disenchanting it yields (greens and better). */
+  disenchant?: LootRef;
+  /** Instant-use potion: health and mana restored (average). Used automatically in fights when low. */
+  potion?: { heal: number; mana: number };
+}
+
+/** A permanent item enchantment (SpellItemEnchantment) flattened into the stats the idle fight uses. */
+export interface EnchantDef {
+  id: number; name: string;
+  stats: [number, number][]; // [statType, value] like ItemDef.stats
+  hp: number; mana: number; armor: number; ap: number; dmg: number;
 }
 
 export interface CreatureDef {
@@ -61,6 +74,8 @@ export interface CreatureDef {
   goldMin: Copper;
   goldMax: Copper;
   loot: LootRef | null;
+  /** Skinning loot (beasts), and the Skinning skill it needs. */
+  skin?: LootRef;
   /** Player factions that can attack it (a Stormwind guard is attackable by the Horde only). */
   hostile: Faction[];
 }
@@ -79,7 +94,8 @@ export interface NodeDef {
 export interface RecipeDef {
   spellId: number;
   name: string;
-  skill: 'cooking';
+  skill: Profession;
+  /** Item made (0 for enchantments). */
   item: ItemId;
   count: number;
   reagents: [ItemId, number][];
@@ -89,6 +105,10 @@ export interface RecipeDef {
   green: number;
   grey: number;
   castMs: number;
+  /** Required tools (blacksmith hammer, enchanting rod, ...), any of each listed id. */
+  tools?: ItemId[];
+  /** Enchanting: the enchantment and what it goes on (ItemDef.class, inventory type bit mask; 0 = any). */
+  enchant?: { id: number; itemClass: number; invMask: number };
   /** Where the recipe comes from: trained by default, or taught by a recipe item. */
   source: { trainer: Copper } | { recipeItem: ItemId };
 }
@@ -145,7 +165,8 @@ export interface GameData {
   levelStats: Record<number, Record<number, [number, number, number, number, number][]>>;
   /** [class][level] = [baseHp, baseMana] */
   classStats: Record<number, [number, number][]>;
-  skillRanks: Record<'mining' | 'herbalism' | 'fishing' | 'cooking', SkillRank[]>;
+  skillRanks: Record<Profession, SkillRank[]>;
+  enchants: Record<number, EnchantDef>;
   zones: ZoneDef[];
   creatures: Record<number, CreatureDef>;
   items: Record<number, ItemDef>;

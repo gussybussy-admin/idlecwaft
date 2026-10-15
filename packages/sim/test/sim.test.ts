@@ -3,6 +3,7 @@ import {
   advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, planTravel, playerStats,
   rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, trainSpells, knownSpells,
   learnTalent, pointsSpent, modded, activeTalentEffects, resetTalents, resetCost,
+  disenchant, unlearnProfession, migrateState, applyCommand, parseCommand,
   type GameState, type SimEvent,
 } from '../src/index.js';
 import { fixture } from './fixture.js';
@@ -363,12 +364,98 @@ describe('professions and commands', () => {
     s.gold = 100;
     train(s, data, 'cooking');
     s.inventory[1] = 5;
-    expect(startAction(s, data, { kind: 'cook', recipe: 300 }).ok).toBe(true);
+    expect(startAction(s, data, { kind: 'craft', recipe: 300 }).ok).toBe(true);
     advance(s, data, T0 + 60_000);
     expect(s.inventory[1]).toBeUndefined();
     expect(s.inventory[6]).toBe(5);
     expect(s.action).toBeNull();
     expect(s.skills.cooking.level).toBeGreaterThan(1);
+  });
+
+  it('only two primary professions at a time; unlearning frees a slot', () => {
+    const s = fresh();
+    s.gold = 1000;
+    expect(train(s, data, 'mining').ok).toBe(true);
+    expect(train(s, data, 'skinning').ok).toBe(true);
+    expect(train(s, data, 'cooking').ok).toBe(true); // secondary
+    expect(train(s, data, 'blacksmithing')).toEqual({ ok: false, error: 'You already know 2 primary professions. Unlearn one first.' });
+    expect(unlearnProfession(s, data, 'skinning').ok).toBe(true);
+    expect(train(s, data, 'blacksmithing').ok).toBe(true);
+    expect(s.recipes).toContain(310);
+  });
+
+  it('crafting needs its tool, and a count stops the action', () => {
+    const s = fresh();
+    s.gold = 1000;
+    train(s, data, 'blacksmithing');
+    s.inventory[2] = 10;
+    expect(startAction(s, data, { kind: 'craft', recipe: 310, count: 3 })).toEqual({ ok: false, error: 'Requires Blacksmith Hammer.' });
+    s.inventory[5956] = 1;
+    expect(startAction(s, data, { kind: 'craft', recipe: 310, count: 3 }).ok).toBe(true);
+    advance(s, data, T0 + 60_000);
+    expect(s.inventory[5]).toBe(3);
+    expect(s.inventory[2]).toBe(7);
+    expect(s.action).toBeNull();
+    expect(s.stats.crafted).toBe(3);
+  });
+
+  it('skins beasts after the kill with a knife, raising Skinning', () => {
+    const s = fresh();
+    s.gold = 1000;
+    s.inventory[5] = 20;
+    train(s, data, 'skinning');
+    startAction(s, data, { kind: 'fight', creature: 100 });
+    advance(s, data, T0 + 10 * 60_000);
+    expect(s.inventory[20]).toBeUndefined(); // no knife yet
+    s.inventory[7005] = 1;
+    advance(s, data, T0 + 40 * 60_000);
+    expect(s.inventory[20]).toBeGreaterThan(5);
+    expect(s.skills.skinning.level).toBeGreaterThan(1);
+  });
+
+  it('disenchants greens and enchants an equipped item', () => {
+    const s = fresh();
+    s.gold = 1000;
+    s.char.level = 2;
+    s.inventory[12] = 1; s.inventory[23] = 1;
+    expect(disenchant(s, data, 12).ok).toBe(false); // no enchanting yet
+    train(s, data, 'enchanting');
+    expect(disenchant(s, data, 12).ok).toBe(true);
+    expect(s.inventory[21]).toBe(2);
+    expect(startAction(s, data, { kind: 'craft', recipe: 320, count: 1 }).ok).toBe(false); // nothing to enchant
+    equip(s, data, 23);
+    const hp0 = playerStats(s, data).maxHp;
+    expect(startAction(s, data, { kind: 'craft', recipe: 320, count: 1 }).ok).toBe(true);
+    advance(s, data, T0 + 30_000);
+    expect(s.enchants.wrist).toBe(41);
+    expect(playerStats(s, data).maxHp).toBe(hp0 + 25);
+    expect(s.inventory[21]).toBe(1);
+  });
+
+  it('drinks a healing potion when a fight goes badly', () => {
+    const s = fresh();
+    s.inventory[22] = 3;
+    s.inventory[5] = 5;
+    let healed = 0;
+    startAction(s, data, { kind: 'fight', creature: 101 }); // the elite ogre
+    advance(s, data, T0 + 5 * 60_000, e => { if (e.type === 'heal' && e.item === 22) healed++; });
+    expect(healed).toBeGreaterThan(0);
+    expect(s.inventory[22] ?? 0).toBeLessThan(3);
+  });
+
+  it('old saves migrate: new skills, cook actions become craft', () => {
+    const s = fresh() as unknown as Record<string, unknown> & GameState;
+    s.skills = { mining: { level: 3, max: 75 } } as GameState['skills'];
+    (s as { action: unknown }).action = { kind: 'cook', recipe: 300 };
+    delete (s as Partial<GameState>).enchants;
+    migrateState(s);
+    expect(s.skills.mining.level).toBe(3);
+    expect(s.skills.tailoring).toEqual({ level: 0, max: 0 });
+    expect(s.action).toEqual({ kind: 'craft', recipe: 300 });
+    expect(s.enchants).toEqual({});
+    expect(parseCommand({ name: 'start', action: { kind: 'craft', recipe: 310, count: 2, slot: 'wrist' } }))
+      .toEqual({ name: 'start', action: { kind: 'craft', recipe: 310, count: 2, slot: 'wrist' } });
+    expect(applyCommand(s, data, { name: 'unlearn', skill: 'mining' }).ok).toBe(true);
   });
 
   it('fishing with a pole catches fish or boots', () => {

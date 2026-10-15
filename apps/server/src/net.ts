@@ -130,6 +130,11 @@ export function createServer({ db, world, gameDataJson, clock = Date.now }: NetO
           return reply(msg.op === 'create' ? world.createRequest(acct.accountId, msg.item, msg.count, msg.note)
             : msg.op === 'fill' ? world.fillRequest(acct.accountId, msg.request, msg.count)
             : msg.op === 'cancel' ? world.cancelRequest(acct.accountId, msg.request) : { ok: false, error: 'Bad op.' });
+        case 'order':
+          return reply(msg.op === 'create' ? world.createOrder(acct.accountId, msg.recipe, msg.count, msg.provide, msg.tip, msg.note)
+            : msg.op === 'claim' ? world.claimOrder(acct.accountId, msg.order)
+            : msg.op === 'deliver' ? world.deliverOrder(acct.accountId, msg.order)
+            : msg.op === 'cancel' ? world.cancelOrder(acct.accountId, msg.order) : { ok: false, error: 'Bad op.' });
         default: return send(ws, { t: 'error', error: 'Unknown message.' });
       }
     });

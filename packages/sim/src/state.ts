@@ -3,8 +3,22 @@ import type { GameData } from './data.js';
 import { seedRng, type RngState } from './rng.js';
 import type { CombatPhase } from './combat.js';
 
-export type Profession = 'mining' | 'herbalism' | 'fishing' | 'cooking';
-export const PROFESSIONS: Profession[] = ['mining', 'herbalism', 'fishing', 'cooking'];
+export type Profession =
+  | 'mining' | 'herbalism' | 'skinning' | 'fishing' | 'cooking' | 'firstaid'
+  | 'alchemy' | 'blacksmithing' | 'enchanting' | 'engineering' | 'leatherworking' | 'tailoring';
+export const PROFESSIONS: Profession[] = [
+  'mining', 'herbalism', 'skinning', 'fishing', 'cooking', 'firstaid',
+  'alchemy', 'blacksmithing', 'enchanting', 'engineering', 'leatherworking', 'tailoring',
+];
+/** Primary professions: a character may know two at a time (vanilla rule); the rest are secondary. */
+export const PRIMARY_PROFESSIONS: Profession[] = ['mining', 'herbalism', 'skinning', 'alchemy', 'blacksmithing', 'enchanting', 'engineering', 'leatherworking', 'tailoring'];
+export const MAX_PRIMARY = 2;
+export const SKILL_NAME: Record<Profession, string> = {
+  mining: 'Mining', herbalism: 'Herbalism', skinning: 'Skinning', fishing: 'Fishing', cooking: 'Cooking', firstaid: 'First Aid',
+  alchemy: 'Alchemy', blacksmithing: 'Blacksmithing', enchanting: 'Enchanting', engineering: 'Engineering',
+  leatherworking: 'Leatherworking', tailoring: 'Tailoring',
+};
+const noSkills = () => Object.fromEntries(PROFESSIONS.map(p => [p, { level: 0, max: 0 }])) as GameState['skills'];
 
 export const SLOTS = ['head', 'neck', 'shoulders', 'back', 'chest', 'wrist', 'hands', 'waist', 'legs', 'feet',
   'finger1', 'finger2', 'trinket1', 'trinket2', 'mainhand', 'offhand', 'ranged'] as const;
@@ -14,7 +28,8 @@ export type Action =
   | { kind: 'fight'; creature: number }
   | { kind: 'gather'; node: number }
   | { kind: 'fish' }
-  | { kind: 'cook'; recipe: number }
+  /** Craft a recipe until out of reagents (or `count` times). Enchants go on your item in `slot`. */
+  | { kind: 'craft'; recipe: number; count?: number; slot?: Slot }
   | { kind: 'travel'; to: number };
 
 export interface Mob { id: number; level: number; hp: number; maxHp: number }
@@ -50,6 +65,10 @@ export interface GameState {
   recipes: number[];
   inventory: Record<number, number>;
   equipment: Partial<Record<Slot, number>>;
+  /** Enchantments (SpellItemEnchantment ids) on equipped items; they fall off when the item is replaced. */
+  enchants: Partial<Record<Slot, number>>;
+  /** Health potions share a 2 minute cooldown. */
+  potionReadyAt?: number;
   zone: number;
   /** Discovered flight paths (TaxiNodes ids). */
   taxi: number[];
@@ -59,8 +78,8 @@ export interface GameState {
   combatSkills: Record<number, number>;
   action: Action | null;
   phase: Phase;
-  settings: { autoEat: boolean; eatBelowPct: number; restBelowPct: number };
-  stats: { kills: Record<number, number>; deaths: number; gathered: number; caught: number; cooked: number };
+  settings: { autoEat: boolean; eatBelowPct: number; restBelowPct: number; autoSkin: boolean; potionBelowPct: number };
+  stats: { kills: Record<number, number>; deaths: number; gathered: number; caught: number; cooked: number; crafted: number; skinned: number };
   log: LogEntry[];
 }
 
@@ -74,16 +93,16 @@ export function newGame(data: GameData, c: NewCharacter): GameState {
     v: 1, rng: seedRng(c.seed), now: c.now, createdAt: c.now,
     char: { name: c.name, race: c.race, cls: c.cls, level: 1, xp: 0, hp: 1, ...(c.look ? { look: c.look } : {}) },
     gold: 0,
-    skills: { mining: { level: 0, max: 0 }, herbalism: { level: 0, max: 0 }, fishing: { level: 0, max: 0 }, cooking: { level: 0, max: 0 } },
-    recipes: [], inventory: {}, equipment: {},
+    skills: noSkills(),
+    recipes: [], inventory: {}, equipment: {}, enchants: {},
     zone: data.startZones?.[c.race] ?? data.zones[0]?.id ?? 12,
     taxi: [], riding: 0, combatSkills: { 95: 1, 162: 1 },
     // Starting spells (free at level 1), e.g. Heroic Strike, Fireball, Smite.
     spells: (data.classSpells?.[c.cls] ?? []).filter(o => o.level <= 1 && o.cost === 0).map(o => o.spell),
     talents: {},
     action: null, phase: { p: 'idle' },
-    settings: { autoEat: true, eatBelowPct: 50, restBelowPct: 60 },
-    stats: { kills: {}, deaths: 0, gathered: 0, caught: 0, cooked: 0 },
+    settings: { autoEat: true, eatBelowPct: 50, restBelowPct: 60, autoSkin: true, potionBelowPct: 35 },
+    stats: { kills: {}, deaths: 0, gathered: 0, caught: 0, cooked: 0, crafted: 0, skinned: 0 },
     log: [],
   };
   // Start at full health: base class HP + stamina HP (see playerStats).
@@ -108,6 +127,12 @@ export function migrateState(s: GameState): GameState {
   s.spells ??= [];
   s.talents ??= {};
   s.char.mana ??= 0; s.char.rage ??= 0; s.char.energy ??= 100; s.char.powerAt ??= s.now;
+  s.skills = { ...noSkills(), ...s.skills };
+  s.enchants ??= {};
+  s.settings.autoSkin ??= true; s.settings.potionBelowPct ??= 35;
+  s.stats.crafted ??= 0; s.stats.skinned ??= 0;
+  const a = s.action as unknown as { kind: string; recipe?: number } | null;
+  if (a?.kind === 'cook') s.action = { kind: 'craft', recipe: a.recipe! }; // pre-4c saves
   return s;
 }
 

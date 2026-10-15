@@ -1,6 +1,6 @@
 // Guild page: roster, activity feed, chat, bank, requests and the bank log.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { GameData, GameState, GuildSnapshot } from '@idle/sim';
+import { SKILL_NAME, type GameData, type GameState, type GuildSnapshot } from '@idle/sim';
 import { game } from './game.js';
 import { fmtTime, ItemIcon, Money } from './ui.js';
 
@@ -19,6 +19,7 @@ export function GuildPage({ s, data, g }: P) {
       <Feed g={g} />
       <Bank s={s} data={data} g={g} />
       <Requests s={s} data={data} g={g} />
+      <Orders s={s} data={data} g={g} />
       <BankLog data={data} g={g} />
     </>
   );
@@ -190,13 +191,85 @@ function BankLog({ data, g }: { data: GameData; g: GuildSnapshot }) {
         {g.log.map(l => (
           <div key={l.id}>
             <span className="faint">{new Date(l.t).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>{' '}
-            {l.who} {l.kind === 'deposit' ? 'deposited' : l.kind === 'withdraw' ? 'withdrew' : 'sent'}{' '}
+            {l.who} {l.kind === 'deposit' ? 'deposited' : l.kind === 'withdraw' ? 'withdrew' : l.kind === 'order' ? 'delivered' : 'sent'}{' '}
             {l.item ? <span className={`q${data.items[l.item]?.quality}`}>{l.count}x {data.items[l.item]?.name}</span> : <Money copper={l.gold} />}
+            {l.kind === 'order' && l.gold > 0 && <> for a tip of <Money copper={l.gold} /></>}
             {l.note && <span className="muted"> {l.note}</span>}
           </div>
         ))}
         {!g.log.length && <span className="faint">No transactions yet.</span>}
       </div>
+    </div>
+  );
+}
+
+function Orders({ s, data, g }: P) {
+  const [query, setQuery] = useState('');
+  const [recipe, setRecipe] = useState<number | null>(null);
+  const [count, setCount] = useState(1);
+  const [provide, setProvide] = useState(true);
+  const [tip, setTip] = useState(0);
+  const [note, setNote] = useState('');
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (q.length < 2) return [];
+    return Object.values(data.recipes).filter(r => r.item && r.name.toLowerCase().includes(q)).sort((a, b) => a.name.length - b.name.length).slice(0, 8);
+  }, [query, data]);
+  const me = game.account?.id;
+  const open = g.orders.filter(o => o.open), done = g.orders.filter(o => !o.open && o.delivered).slice(0, 6);
+  const r = recipe ? data.recipes[recipe] : null;
+  const canProvide = !!r && r.reagents.every(([i, n]) => (s.inventory[i] ?? 0) >= n * count);
+  return (
+    <div className="panel">
+      <div className="panel-head"><h3>Crafting orders</h3><span className="muted">Order something a guildmate can make; hand over the reagents and a tip, they craft it for you.</span></div>
+      <div className="grid">
+        {open.map(o => {
+          const rr = data.recipes[o.recipe];
+          if (!rr) return null;
+          const mine = o.accountId === me, crafting = o.crafterId === me, knows = s.recipes.includes(o.recipe);
+          const need = rr.count * o.count, have = s.inventory[rr.item] ?? 0;
+          return (
+            <div key={o.id} className={`card ${crafting ? 'current' : ''}`}>
+              <div className="row"><ItemIcon id={rr.item} data={data} />
+                <div style={{ minWidth: 0 }}><div className={`title q${data.items[rr.item]?.quality}`}>{need}x {data.items[rr.item]?.name}</div>
+                  <div className="meta">{o.who} · {SKILL_NAME[rr.skill]}{o.note ? ` · "${o.note}"` : ''}</div></div></div>
+              <div className="meta">{o.reagents.length ? `Reagents provided: ${o.reagents.map(([i, n]) => `${n} ${data.items[i]?.name}`).join(', ')}` : 'Bring your own reagents'}
+                {o.tip > 0 && <> · tip <Money copper={o.tip} /></>}</div>
+              <div className="meta">{o.crafter ? `Being crafted by ${o.crafter}` : 'Waiting for a crafter'}</div>
+              <div className="btn-row">
+                {mine && !o.crafter && <button className="btn secondary small" onClick={() => game.orderOp('cancel', o.id)}>Cancel</button>}
+                {!mine && !o.crafter && <button className="btn small" disabled={!knows} title={knows ? '' : `You don't know ${rr.name}`} onClick={() => game.orderOp('claim', o.id)}>
+                  {knows ? 'Take order' : "You don't know this recipe"}</button>}
+                {crafting && <>
+                  <button className="btn small" disabled={have < need} onClick={() => game.orderOp('deliver', o.id)}>Deliver ({Math.min(have, need)}/{need})</button>
+                  <button className="btn secondary small" onClick={() => game.command({ name: 'start', action: { kind: 'craft', recipe: o.recipe, count: Math.max(1, o.count - Math.floor(have / rr.count)) } })}>Craft</button>
+                  <button className="btn secondary small" onClick={() => game.orderOp('cancel', o.id)}>Give up</button>
+                </>}
+              </div>
+            </div>
+          );
+        })}
+        {!open.length && <span className="faint">No open orders.</span>}
+      </div>
+      <div className="btn-row" style={{ marginTop: 14, position: 'relative', flexWrap: 'wrap' }}>
+        <input className="text" style={{ maxWidth: 240 }} placeholder="Recipe, e.g. Linen Bandage" value={r ? r.name : query}
+          onChange={e => { setRecipe(null); setQuery(e.target.value); }} />
+        <input className="text" type="number" min={1} max={100} value={count} style={{ width: 70 }} title="How many crafts" onChange={e => setCount(Math.max(1, Math.min(100, +e.target.value || 1)))} />
+        <label className="muted" style={{ fontSize: 13 }} title={r && !canProvide ? "You don't have all the reagents" : ''}>
+          <input type="checkbox" checked={provide && canProvide} disabled={!canProvide} onChange={e => setProvide(e.target.checked)} /> Provide reagents</label>
+        <input className="text" type="number" min={0} value={tip / 100} style={{ width: 80 }} title="Tip in silver" onChange={e => setTip(Math.max(0, Math.round((+e.target.value || 0) * 100)))} />
+        <span className="muted" style={{ fontSize: 12 }}>silver tip</span>
+        <input className="text" style={{ maxWidth: 200 }} placeholder="Note (optional)" maxLength={80} value={note} onChange={e => setNote(e.target.value)} />
+        <button className="btn" disabled={!r || s.gold < tip} onClick={() => recipe && game.createOrder(recipe, count, provide && canProvide, tip, note)
+          .then(ok => { if (ok) { setRecipe(null); setQuery(''); setNote(''); setTip(0); setCount(1); } })}>Place order</button>
+        {!recipe && matches.length > 0 && (
+          <div className="suggest">{matches.map(m => (
+            <button key={m.spellId} onClick={() => { setRecipe(m.spellId); setQuery(''); }}><ItemIcon id={m.item} data={data} size="sm" />
+              <span className={`q${data.items[m.item]?.quality}`}>{m.name}</span> <span className="faint">{SKILL_NAME[m.skill]}</span></button>))}</div>
+        )}
+      </div>
+      {r && <div className="meta" style={{ marginTop: 6 }}>Needs {r.reagents.map(([i, n]) => `${n * count} ${data.items[i]?.name} (you have ${s.inventory[i] ?? 0})`).join(', ')}</div>}
+      {done.length > 0 && <div className="meta" style={{ marginTop: 10 }}>Recently delivered: {done.map(o => `${o.crafter} → ${o.who}: ${(data.recipes[o.recipe]?.count ?? 1) * o.count} ${data.items[data.recipes[o.recipe]?.item]?.name}`).join(' · ')}</div>}
     </div>
   );
 }

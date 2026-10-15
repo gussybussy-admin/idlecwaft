@@ -5,7 +5,7 @@ import type { Action, GameState, Profession, Slot } from './state.js';
 import { PROFESSIONS, SLOTS } from './state.js';
 import { learnTalent, resetTalents } from './talents.js';
 import {
-  buy, equip, learnRecipe, sell, startAction, stopAction, train, trainRiding, trainSpells, unequip, type CommandResult,
+  buy, disenchant, equip, learnRecipe, unlearnProfession, sell, startAction, stopAction, train, trainRiding, trainSpells, unequip, type CommandResult,
 } from './engine.js';
 
 export type Command =
@@ -18,11 +18,13 @@ export type Command =
   | { name: 'sellJunk' }
   | { name: 'equip'; item: number }
   | { name: 'unequip'; slot: Slot }
-  | { name: 'settings'; autoEat?: boolean; eatBelowPct?: number; restBelowPct?: number }
+  | { name: 'settings'; autoEat?: boolean; eatBelowPct?: number; restBelowPct?: number; autoSkin?: boolean; potionBelowPct?: number }
   | { name: 'trainRiding' }
   | { name: 'trainSpells' }
   | { name: 'learnTalent'; talent: number }
-  | { name: 'resetTalents' };
+  | { name: 'resetTalents' }
+  | { name: 'unlearn'; skill: Profession }
+  | { name: 'disenchant'; item: number };
 
 const int = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 
@@ -37,12 +39,19 @@ export function parseCommand(raw: unknown): Command | null {
       if (a.kind === 'fight' && int(a.creature, 1, 1e7)) return { name: 'start', action: { kind: 'fight', creature: a.creature as number } };
       if (a.kind === 'gather' && int(a.node, 1, 1e7)) return { name: 'start', action: { kind: 'gather', node: a.node as number } };
       if (a.kind === 'fish') return { name: 'start', action: { kind: 'fish' } };
-      if (a.kind === 'cook' && int(a.recipe, 1, 1e7)) return { name: 'start', action: { kind: 'cook', recipe: a.recipe as number } };
+      if ((a.kind === 'craft' || a.kind === 'cook') && int(a.recipe, 1, 1e7)) {
+        const action: Action = { kind: 'craft', recipe: a.recipe as number };
+        if (int(a.count, 1, 10000)) action.count = a.count as number;
+        if (SLOTS.includes(a.slot as Slot)) action.slot = a.slot as Slot;
+        return { name: 'start', action };
+      }
       if (a.kind === 'travel' && int(a.to, 1, 1e7)) return { name: 'start', action: { kind: 'travel', to: a.to as number } };
       return null;
     }
     case 'stop': case 'sellJunk': case 'trainRiding': case 'trainSpells': case 'resetTalents': return { name: c.name };
     case 'learnTalent': return int(c.talent, 1, 1e7) ? { name: 'learnTalent', talent: c.talent as number } : null;
+    case 'unlearn': return PROFESSIONS.includes(c.skill as Profession) ? { name: 'unlearn', skill: c.skill as Profession } : null;
+    case 'disenchant': return int(c.item, 1, 1e7) ? { name: 'disenchant', item: c.item as number } : null;
     case 'train': return PROFESSIONS.includes(c.skill as Profession) ? { name: 'train', skill: c.skill as Profession } : null;
     case 'learnRecipe': return int(c.recipe, 1, 1e7) ? { name: 'learnRecipe', recipe: c.recipe as number } : null;
     case 'buy': case 'sell':
@@ -54,6 +63,8 @@ export function parseCommand(raw: unknown): Command | null {
       if (typeof c.autoEat === 'boolean') out.autoEat = c.autoEat;
       if (int(c.eatBelowPct, 10, 99)) out.eatBelowPct = c.eatBelowPct as number;
       if (int(c.restBelowPct, 10, 99)) out.restBelowPct = c.restBelowPct as number;
+      if (typeof c.autoSkin === 'boolean') out.autoSkin = c.autoSkin;
+      if (int(c.potionBelowPct, 5, 90)) out.potionBelowPct = c.potionBelowPct as number;
       return out;
     }
     default: return null;
@@ -78,10 +89,14 @@ export function applyCommand(s: GameState, data: GameData, c: Command): CommandR
     case 'trainSpells': return trainSpells(s, data);
     case 'learnTalent': return learnTalent(s, data, c.talent);
     case 'resetTalents': return resetTalents(s);
+    case 'unlearn': return unlearnProfession(s, data, c.skill);
+    case 'disenchant': return disenchant(s, data, c.item);
     case 'settings':
       if (c.autoEat !== undefined) s.settings.autoEat = c.autoEat;
       if (c.eatBelowPct !== undefined) s.settings.eatBelowPct = c.eatBelowPct;
       if (c.restBelowPct !== undefined) s.settings.restBelowPct = c.restBelowPct;
+      if (c.autoSkin !== undefined) s.settings.autoSkin = c.autoSkin;
+      if (c.potionBelowPct !== undefined) s.settings.potionBelowPct = c.potionBelowPct;
       return { ok: true };
   }
 }

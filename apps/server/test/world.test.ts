@@ -104,6 +104,44 @@ describe('guild bank and requests', () => {
     const r = world.guildSnapshot().requests.find(x => x.id === req.id)!;
     expect(r).toMatchObject({ filled: 20, open: false });
   });
+
+  it('runs a crafting order: escrowed reagents and tip, claim, craft, deliver', () => {
+    const { world, account, clock } = setup();
+    const buyer = account('gina'), smith = account('hal');
+    const b = world.stateOf(buyer)!, s = world.stateOf(smith)!;
+    b.inventory[2] = 5; b.gold = 100;
+    expect(world.createOrder(buyer, 310, 3, true, 40, 'sharpeners please').ok).toBe(true);
+    expect(b.inventory[2]).toBe(2); // 3 ore held for the order
+    expect(b.gold).toBe(60);
+    const id = world.guildSnapshot().orders[0].id;
+    expect(world.claimOrder(smith, id)).toEqual({ ok: false, error: "You don't know Rough Test Sharpener." });
+    s.gold = 100;
+    world.command(smith, { name: 'train', skill: 'blacksmithing' });
+    s.inventory[5956] = 1;
+    expect(world.claimOrder(smith, id).ok).toBe(true);
+    expect(s.inventory[2]).toBe(3);
+    expect(world.cancelOrder(buyer, id)).toEqual({ ok: false, error: 'A crafter is already working on it.' });
+    expect(world.deliverOrder(smith, id).ok).toBe(false); // nothing crafted yet
+    world.connect(smith);
+    world.command(smith, { name: 'start', action: { kind: 'craft', recipe: 310 } });
+    clock.add(60_000);
+    world.tick();
+    expect(world.deliverOrder(smith, id).ok).toBe(true);
+    expect(world.stateOf(buyer)!.inventory[5]).toBe(3);
+    expect(world.stateOf(smith)!.gold).toBe(100 - 10 + 40); // training cost 10c, tip 40c
+    expect(world.guildSnapshot().orders[0]).toMatchObject({ open: false, delivered: true, crafterId: smith });
+  });
+
+  it('cancelling an unclaimed order returns the reagents and tip', () => {
+    const { world, account } = setup();
+    const buyer = account('ivy');
+    const b = world.stateOf(buyer)!;
+    b.inventory[2] = 2; b.gold = 50;
+    expect(world.createOrder(buyer, 310, 2, true, 20, '').ok).toBe(true);
+    expect(world.cancelOrder(buyer, world.guildSnapshot().orders[0].id).ok).toBe(true);
+    expect(b.inventory[2]).toBe(2);
+    expect(b.gold).toBe(50);
+  });
 });
 
 describe('chat and feed', () => {

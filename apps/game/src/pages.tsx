@@ -1,13 +1,14 @@
 // Game pages: combat, gathering, fishing, cooking, character, town, log.
 import { useEffect, useRef, useState } from 'react';
 import {
-  canCook, canFish, canGather, equipSlots, factionOfRace, fishingCatchChance, gatherColor, killXp,
-  playerStats, recipeColor, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
+  canFish, canGather, equipSlots, factionOfRace, fishingCatchChance, gatherColor, killXp, MAX_PRIMARY,
+  playerStats, PRIMARY_PROFESSIONS, PROFESSIONS, SKILL_NAME, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
 } from '@idle/sim';
 import { game } from './game.js';
 import { Diorama, type Activity } from './diorama.js';
 import { topDrops } from './loot-preview.js';
 import { PowerBar } from './spells.js';
+import { CraftPage } from './crafting.js';
 import { Bar, colorClass, fmtTime, Icon, ItemIcon, ItemTooltip, Money, withTip } from './ui.js';
 
 type P = { s: GameState; data: GameData };
@@ -119,7 +120,7 @@ function CombatScene({ s, data }: P) {
     : ph.p === 'rest' ? (ph.eating ? 'eat' : 'rest')
     : s.action?.kind === 'fight' ? 'combat'
     : s.action?.kind === 'gather' ? (data.nodes[s.action.node]?.skill ?? 'mining')
-    : s.action?.kind === 'fish' ? 'fishing' : s.action?.kind === 'cook' ? 'cooking' : 'idle';
+    : s.action?.kind === 'fish' ? 'fishing' : s.action?.kind === 'craft' ? 'cooking' : 'idle';
   useEffect(() => { dio.current?.setActivity(activity); }, [activity]);
 
   const st = playerStats(s, data);
@@ -170,7 +171,7 @@ export function GatherPage({ s, data, skill }: P & { skill: 'mining' | 'herbalis
                 {drops[0] && <ItemIcon id={drops[0][0]} data={data} size="lg" />}
                 <div style={{ minWidth: 0 }}>
                   <div className={`title ${colorClass(color)}`}>{n.name}</div>
-                  <div className="meta">Requires {cap(skill)} {n.reqSkill} · {spawns} in zone</div>
+                  <div className="meta">Requires {SKILL_NAME[skill]} {n.reqSkill} · {spawns} in zone</div>
                 </div>
               </div>
               <div className="row" style={{ gap: 4 }}>{drops.map(([i]) => <ItemIcon key={i} id={i} data={data} size="sm" />)}</div>
@@ -185,6 +186,7 @@ export function GatherPage({ s, data, skill }: P & { skill: 'mining' | 'herbalis
           );
         })}
       </div>
+      {skill === 'mining' && <CraftPage s={s} data={data} skill="mining" embedded />}
     </>
   );
 }
@@ -219,56 +221,16 @@ export function FishingPage({ s, data }: P) {
   );
 }
 
-// ================================================================ cooking
-
-export function CookingPage({ s, data }: P) {
-  const current = s.action?.kind === 'cook' ? s.action.recipe : null;
-  const recipes = Object.values(data.recipes).sort((a, b) => a.orange - b.orange);
-  return (
-    <>
-      <SkillHeader s={s} data={data} skill="cooking" />
-      <div className="grid">
-        {recipes.map(r => {
-          const known = s.recipes.includes(r.spellId);
-          const color = s.skills.cooking.max ? recipeColor(s.skills.cooking.level, r) : 'red';
-          const err = canCook(s, data, r.spellId);
-          const craftable = Math.min(...r.reagents.map(([i, n]) => Math.floor((s.inventory[i] ?? 0) / n)));
-          return (
-            <div key={r.spellId} className={`card ${current === r.spellId ? 'current' : ''} ${!known ? 'locked' : ''}`}>
-              <div className="row"><ItemIcon id={r.item} data={data} size="lg" /><div style={{ minWidth: 0 }}>
-                <div className={`title ${colorClass(color)}`}>{r.name}</div>
-                <div className="meta">{known ? `Can make ${craftable}` : 'trainer' in r.source ? (r.source.trainer ? 'Taught by a cooking trainer' : 'Learned with Cooking') : `Taught by ${data.items[r.source.recipeItem]?.name ?? 'a recipe'}`}</div>
-              </div></div>
-              <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>{r.reagents.map(([i, n]) => (
-                <span key={i} className="row" style={{ gap: 4 }}><ItemIcon id={i} data={data} size="sm" />
-                  <span className={(s.inventory[i] ?? 0) >= n ? '' : 'c-red'} style={{ fontSize: 12 }}>{s.inventory[i] ?? 0}/{n}</span></span>))}</div>
-              <div className="meta"><span className="c-orange">{r.orange}</span> · <span className="c-yellow">{r.yellow}</span> · <span className="c-green">{r.green}</span> · <span className="c-grey">{r.grey}</span></div>
-              {current === r.spellId && <WorkBar s={s} />}
-              <div className="btn-row">
-                {!known ? <button className="btn secondary" onClick={() => game.command({ name: 'learnRecipe', recipe: r.spellId })}>
-                  Learn {'trainer' in r.source ? (r.source.trainer ? <Money copper={r.source.trainer} /> : '') : 'from recipe'}</button>
-                  : current === r.spellId ? <button className="btn secondary" onClick={() => game.command({ name: 'stop' })}>Stop</button>
-                  : <button className="btn" disabled={!!err} title={err ?? ''} onClick={() => game.command({ name: 'start', action: { kind: 'cook', recipe: r.spellId } })}>Cook</button>}
-                {known && err && <span className="faint" style={{ fontSize: 12 }}>{err}</span>}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </>
-  );
-}
-
 // ================================================================ shared skill bits
 
-function SkillHeader({ s, data, skill }: P & { skill: Profession }) {
+export function SkillHeader({ s, data, skill }: P & { skill: Profession }) {
   const sk = s.skills[skill];
   const next = data.skillRanks[skill].find(r => r.max > sk.max);
   return (
     <div className="panel">
       <div className="panel-head" style={{ marginBottom: 8 }}>
         <Icon name={SKILL_ICON[skill]} size="lg" />
-        <div><h2>{cap(skill)}</h2><div className="muted">{sk.max ? `${rankName(data, skill, sk.max)} · ${sk.level} / ${sk.max}` : 'Not trained'}</div></div>
+        <div><h2>{SKILL_NAME[skill]}</h2><div className="muted">{sk.max ? `${rankName(data, skill, sk.max)} · ${sk.level} / ${sk.max}` : 'Not trained'}{PRIMARY_PROFESSIONS.includes(skill) ? ' · primary' : ' · secondary'}</div></div>
         <span className="spacer" />
         {next && <button className="btn secondary" onClick={() => game.command({ name: 'train', skill })}>
           Train {next.name} {next.cost ? <Money copper={next.cost} /> : ''}{next.reqLevel > s.char.level ? ` (level ${next.reqLevel})` : ''}</button>}
@@ -278,7 +240,7 @@ function SkillHeader({ s, data, skill }: P & { skill: Profession }) {
   );
 }
 
-function WorkBar({ s }: { s: GameState }) {
+export function WorkBar({ s }: { s: GameState }) {
   const [, force] = useState(0);
   useEffect(() => { const t = setInterval(() => force(x => x + 1), 100); return () => clearInterval(t); }, []);
   const ph = s.phase;
@@ -287,7 +249,10 @@ function WorkBar({ s }: { s: GameState }) {
 }
 
 export const SKILL_ICON: Record<Profession, string> = {
-  mining: 'Trade_Mining', herbalism: 'INV_Misc_Flower_02', fishing: 'Trade_Fishing', cooking: 'INV_Misc_Food_15',
+  mining: 'Trade_Mining', herbalism: 'INV_Misc_Flower_02', skinning: 'INV_Misc_Pelt_Wolf_01', fishing: 'Trade_Fishing',
+  cooking: 'INV_Misc_Food_15', firstaid: 'Spell_Holy_SealOfSacrifice', alchemy: 'Trade_Alchemy',
+  blacksmithing: 'Trade_BlackSmithing', enchanting: 'Trade_Engraving', engineering: 'Trade_Engineering',
+  leatherworking: 'INV_Misc_ArmorKit_17', tailoring: 'Trade_Tailoring',
 };
 const rankName = (data: GameData, skill: Profession, max: number) => data.skillRanks[skill].find(r => r.max === max)?.name ?? '';
 const cap = (x: string) => x[0].toUpperCase() + x.slice(1);
@@ -400,18 +365,20 @@ export function TownPage({ s, data }: P) {
     <>
       <div className="panel-head"><h2>Trainers & Vendors</h2><span className="muted">{zone.name}</span></div>
       <div className="panel">
-        <div className="panel-head"><h3>Profession trainers</h3></div>
+        <div className="panel-head"><h3>Profession trainers</h3><span className="spacer" />
+          <span className="muted">Primary professions: {PRIMARY_PROFESSIONS.filter(p => s.skills[p]?.max).length} / {MAX_PRIMARY}</span></div>
         <div className="grid">
-          {(['mining', 'herbalism', 'fishing', 'cooking'] as Profession[]).map(skill => {
+          {PROFESSIONS.map(skill => {
             const sk = s.skills[skill];
             const next = data.skillRanks[skill].find(r => r.max > sk.max);
             return (
               <div key={skill} className="card">
-                <div className="row"><Icon name={SKILL_ICON[skill]} /><div><div className="title">{cap(skill)}</div>
-                  <div className="meta">{sk.max ? `${sk.level} / ${sk.max}` : 'Not trained'}</div></div></div>
+                <div className="row"><Icon name={SKILL_ICON[skill]} /><div><div className="title">{SKILL_NAME[skill]}</div>
+                  <div className="meta">{sk.max ? `${sk.level} / ${sk.max}` : 'Not trained'}{PRIMARY_PROFESSIONS.includes(skill) ? '' : ' · secondary'}</div></div></div>
                 {next ? <button className="btn secondary" onClick={() => game.command({ name: 'train', skill })}>
                   {next.name} ({next.max}) {next.cost ? <Money copper={next.cost} /> : 'free'}{next.reqLevel > s.char.level ? ` · lvl ${next.reqLevel}` : ''}</button>
                   : <span className="muted">Max rank</span>}
+                {sk.max > 0 && <button className="btn secondary small" onClick={() => confirm(`Unlearn ${SKILL_NAME[skill]}? Your skill and recipes are lost.`) && game.command({ name: 'unlearn', skill })}>Unlearn</button>}
               </div>
             );
           })}

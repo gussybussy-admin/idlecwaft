@@ -1,9 +1,9 @@
 // The authoritative world: every character's sim state, the guild, chat and the activity feed.
 // Transport-independent (the network layer subscribes to it) and driven by an injectable clock.
 import {
-  addItem, advance, applyCommand, emptySummary, hasItem, migrateState, newGame, OFFLINE_CAP_MS, summarize,
+  addItem, advance, applyCommand, emptySummary, hasItem, migrateState, newGame, OFFLINE_CAP_MS, SKILL_NAME, summarize,
   type Appearance, type BankLogEntry, type ChatMessage, type Command, type CommandResult, type FeedItem,
-  type GameData, type GameState, type GuildRequest, type GuildSnapshot, type RosterEntry, type SimEvent, type Summary,
+  type CraftOrder, type GameData, type GameState, type GuildRequest, type GuildSnapshot, type RosterEntry, type SimEvent, type Summary,
 } from '@idle/sim';
 import type { DB } from './db.js';
 
@@ -13,6 +13,9 @@ const AWAY_REPORT_MIN_MS = 60_000;
 const KILL_FEED_WINDOW_MS = 30 * 60_000;
 const CHAT_MAX = 300, CHAT_BURST = 5, CHAT_WINDOW_MS = 10_000;
 const MAX_OPEN_REQUESTS = 10;
+const MAX_OPEN_ORDERS = 10;
+
+interface OrderRow { id: number; t: number; account_id: number; recipe: number; count: number; reagents: string; tip: number; note: string; crafter_id: number | null; open: number; delivered: number }
 
 interface Char {
   accountId: number;
@@ -168,7 +171,7 @@ export class World {
     c.dirty = true;
     if (r.ok && cmd.name === 'train') {
       const rank = this.data.skillRanks[cmd.skill].find(x => x.max === c.state.skills[cmd.skill].max);
-      if (rank && rank.max > before) this.addFeed(accountId, 'rank', `${c.name} is now ${/^[AEIOU]/.test(rank.name) ? 'an' : 'a'} ${rank.name} ${cap(cmd.skill)}.`, now);
+      if (rank && rank.max > before) this.addFeed(accountId, 'rank', `${c.name} is now ${/^[AEIOU]/.test(rank.name) ? 'an' : 'a'} ${rank.name} ${SKILL_NAME[cmd.skill]}.`, now);
     }
     this.emit('state', accountId);
     this.emit('guild');
@@ -289,6 +292,125 @@ export class World {
     return OK;
   }
 
+  // ------------------------------------------------------------------ crafting orders
+
+  createOrder(accountId: number, recipe: unknown, count: unknown, provide: unknown, tip: unknown, note: unknown): Result {
+    const c = this.chars.get(accountId);
+    if (!c) return fail('No character.');
+    if (!isInt(recipe, 1, 1e7) || !this.data.recipes[recipe]) return fail('Unknown recipe.');
+    const r = this.data.recipes[recipe];
+    if (!r.item) return fail('Enchantments go on your own gear; ask an enchanter in chat.');
+    if (!isInt(count, 1, 100)) return fail('Order 1-100.');
+    if (!isInt(tip, 0, 1e9)) return fail('Invalid tip.');
+    const open = (this.db.prepare(`SELECT COUNT(*) n FROM craft_orders WHERE account_id = ? AND open = 1`).get(accountId) as { n: number }).n;
+    if (open >= MAX_OPEN_ORDERS) return fail(`You can have ${MAX_OPEN_ORDERS} open orders.`);
+    this.advanceChar(c, this.clock());
+    const s = c.state;
+    const reagents: [number, number][] = provide === true ? r.reagents.map(([i, n]) => [i, n * count]) : [];
+    for (const [i, n] of reagents) if (!hasItem(s, i, n)) return fail(`You don't have ${n} ${this.data.items[i]?.name ?? 'reagents'}.`);
+    if (s.gold < tip) return fail("You don't have that much money for the tip.");
+    const text = typeof note === 'string' ? note.trim().slice(0, 80) : '';
+    this.db.transaction(() => {
+      for (const [i, n] of reagents) addItem(s, i, -n);
+      s.gold -= tip;
+      this.db.prepare(`INSERT INTO craft_orders (t, account_id, recipe, count, reagents, tip, note) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(this.clock(), accountId, recipe, count, JSON.stringify(reagents), tip, text);
+      this.persist(c);
+    })();
+    this.emit('state', accountId);
+    this.emit('guild');
+    return OK;
+  }
+
+  private order(id: unknown): OrderRow | undefined {
+    if (!isInt(id, 1, 1e12)) return undefined;
+    return this.db.prepare(`SELECT * FROM craft_orders WHERE id = ?`).get(id) as OrderRow | undefined;
+  }
+
+  /** A crafter who knows the recipe takes the order and receives any reagents held for it. */
+  claimOrder(accountId: number, id: unknown): Result {
+    const c = this.chars.get(accountId);
+    const o = this.order(id);
+    if (!c) return fail('No character.');
+    if (!o || !o.open) return fail('That order is no longer open.');
+    if (o.crafter_id) return fail('Someone is already crafting that.');
+    if (o.account_id === accountId) return fail("You can't take your own order.");
+    if (!c.state.recipes.includes(o.recipe)) return fail(`You don't know ${this.data.recipes[o.recipe]?.name ?? 'that recipe'}.`);
+    this.advanceChar(c, this.clock());
+    this.db.transaction(() => {
+      for (const [i, n] of JSON.parse(o.reagents) as [number, number][]) addItem(c.state, i, n);
+      this.db.prepare(`UPDATE craft_orders SET crafter_id = ? WHERE id = ?`).run(accountId, o.id);
+      this.persist(c);
+    })();
+    this.emit('state', accountId);
+    this.emit('guild');
+    return OK;
+  }
+
+  /** The crafter hands over the finished items and collects the tip. */
+  deliverOrder(accountId: number, id: unknown): Result {
+    const crafter = this.chars.get(accountId);
+    const o = this.order(id);
+    if (!crafter) return fail('No character.');
+    if (!o || !o.open) return fail('That order is no longer open.');
+    if (o.crafter_id !== accountId) return fail("That order isn't yours to deliver.");
+    const buyer = this.chars.get(o.account_id);
+    if (!buyer) return fail('That member has no character.');
+    const r = this.data.recipes[o.recipe];
+    const items = r.count * o.count;
+    const now = this.clock();
+    this.advanceChar(crafter, now);
+    this.advanceChar(buyer, now);
+    if (!hasItem(crafter.state, r.item, items)) return fail(`You need ${items} ${this.data.items[r.item]?.name} to deliver.`);
+    this.db.transaction(() => {
+      addItem(crafter.state, r.item, -items);
+      addItem(buyer.state, r.item, items);
+      crafter.state.gold += o.tip;
+      this.db.prepare(`UPDATE craft_orders SET open = 0, delivered = 1 WHERE id = ?`).run(o.id);
+      this.bankLog(accountId, 'order', r.item, items, o.tip, `crafted for ${buyer.name}`);
+      this.persist(crafter);
+      this.persist(buyer);
+    })();
+    this.emit('state', accountId);
+    this.emit('state', buyer.accountId);
+    this.emit('guild');
+    return OK;
+  }
+
+  /**
+   * The buyer cancels an unclaimed order (reagents and tip come back), or the crafter gives up a
+   * claimed one (handing the reagents back so the order is open again).
+   */
+  cancelOrder(accountId: number, id: unknown): Result {
+    const o = this.order(id);
+    if (!o || !o.open) return fail('That order is no longer open.');
+    const reagents = JSON.parse(o.reagents) as [number, number][];
+    if (o.crafter_id === accountId) {
+      const crafter = this.chars.get(accountId)!;
+      this.advanceChar(crafter, this.clock());
+      for (const [i, n] of reagents) if (!hasItem(crafter.state, i, n)) return fail(`Return the ${n} ${this.data.items[i]?.name} first.`);
+      this.db.transaction(() => {
+        for (const [i, n] of reagents) addItem(crafter.state, i, -n);
+        this.db.prepare(`UPDATE craft_orders SET crafter_id = NULL WHERE id = ?`).run(o.id);
+        this.persist(crafter);
+      })();
+      this.emit('state', accountId);
+    } else if (o.account_id === accountId) {
+      if (o.crafter_id) return fail('A crafter is already working on it.');
+      const buyer = this.chars.get(accountId)!;
+      this.advanceChar(buyer, this.clock());
+      this.db.transaction(() => {
+        for (const [i, n] of reagents) addItem(buyer.state, i, n);
+        buyer.state.gold += o.tip;
+        this.db.prepare(`UPDATE craft_orders SET open = 0 WHERE id = ?`).run(o.id);
+        this.persist(buyer);
+      })();
+      this.emit('state', accountId);
+    } else return fail("That order isn't yours.");
+    this.emit('guild');
+    return OK;
+  }
+
   // ------------------------------------------------------------------ chat + feed
 
   chat(accountId: number, text: unknown): Result {
@@ -335,6 +457,12 @@ export class World {
       requests: (this.db.prepare(`SELECT * FROM guild_requests WHERE open = 1 OR t > ? ORDER BY open DESC, id DESC LIMIT 40`).all(this.clock() - 3 * 86_400_000) as
         { id: number; t: number; account_id: number; item: number; count: number; filled: number; note: string; open: number }[])
         .map((r): GuildRequest => ({ id: r.id, t: r.t, who: nameOf(r.account_id), accountId: r.account_id, item: r.item, count: r.count, filled: r.filled, note: r.note, open: !!r.open })),
+      orders: (this.db.prepare(`SELECT * FROM craft_orders WHERE open = 1 OR t > ? ORDER BY open DESC, id DESC LIMIT 40`).all(this.clock() - 3 * 86_400_000) as OrderRow[])
+        .map((r): CraftOrder => ({
+          id: r.id, t: r.t, who: nameOf(r.account_id), accountId: r.account_id, recipe: r.recipe, count: r.count,
+          reagents: JSON.parse(r.reagents), tip: r.tip, note: r.note,
+          crafter: r.crafter_id ? nameOf(r.crafter_id) : null, crafterId: r.crafter_id, open: !!r.open, delivered: !!r.delivered,
+        })),
       chat: (this.db.prepare(`SELECT * FROM chat ORDER BY id DESC LIMIT 60`).all() as { id: number; t: number; account_id: number; text: string }[])
         .reverse().map(r => ({ id: r.id, t: r.t, who: nameOf(r.account_id), text: r.text })),
       feed: (this.db.prepare(`SELECT * FROM feed ORDER BY id DESC LIMIT 40`).all() as { id: number; t: number; account_id: number; kind: FeedItem['kind']; text: string }[])
@@ -364,7 +492,7 @@ export function activityText(s: GameState, data: GameData): string {
     case 'fight': return `Fighting ${data.creatures[a.creature]?.name ?? 'monsters'}`;
     case 'gather': { const n = data.nodes[a.node]; return n ? `${n.skill === 'mining' ? 'Mining' : 'Gathering'} ${n.name}` : 'Gathering'; }
     case 'fish': return 'Fishing';
-    case 'cook': return `Cooking ${data.recipes[a.recipe]?.name ?? ''}`.trim();
+    case 'craft': { const r = data.recipes[a.recipe]; return r ? `${r.skill === 'cooking' ? 'Cooking' : 'Crafting'} ${r.name}` : 'Crafting'; }
     case 'travel': return `Travelling to ${data.zones.find(z => z.id === a.to)?.name ?? 'somewhere'}`;
   }
 }

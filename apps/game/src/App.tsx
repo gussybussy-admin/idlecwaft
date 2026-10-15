@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { playerStats, pointsSpent, talentPoints, trainableSpells, type GameData, type GameState, type Profession, type Summary } from '@idle/sim';
+import { playerStats, PRIMARY_PROFESSIONS, SKILL_NAME, pointsSpent, talentPoints, trainableSpells, type GameData, type GameState, type Profession, type Summary } from '@idle/sim';
 import { game } from './game.js';
 import { GuildPage } from './guild.js';
 import { TravelPage } from './travel.js';
 import { PowerBar, SpellbookPage, TalentsPage } from './spells.js';
-import { BagsPanel, CharacterPage, CombatPage, CookingPage, FishingPage, GatherPage, LogPage, SKILL_ICON, TownPage } from './pages.js';
+import { BagsPanel, CharacterPage, CombatPage, FishingPage, GatherPage, LogPage, SKILL_ICON, TownPage } from './pages.js';
+import { CraftPage, SkinningPage } from './crafting.js';
 import { Bar, fmtTime, hideTip, Icon, ItemIcon, Money, TooltipHost } from './ui.js';
 import { randomLook, type Look } from './character.js';
 import { Diorama } from './diorama.js';
@@ -18,6 +19,7 @@ function CharacterPreview({ look }: { look: Look }) {
   return <div className="diorama" ref={host} style={{ height: 260, marginTop: 10 }} />;
 }
 
+const CRAFTING: Profession[] = ['cooking', 'firstaid', 'alchemy', 'blacksmithing', 'enchanting', 'engineering', 'leatherworking', 'tailoring'];
 type Page = 'combat' | Profession | 'character' | 'spells' | 'talents' | 'bags' | 'town' | 'travel' | 'guild' | 'log';
 
 export function App() {
@@ -42,7 +44,8 @@ export function App() {
         {page === 'combat' && <CombatPage s={s} data={data} />}
         {(page === 'mining' || page === 'herbalism') && <GatherPage s={s} data={data} skill={page} />}
         {page === 'fishing' && <FishingPage s={s} data={data} />}
-        {page === 'cooking' && <CookingPage s={s} data={data} />}
+        {page === 'skinning' && <SkinningPage s={s} data={data} />}
+        {CRAFTING.includes(page as Profession) && <CraftPage key={page} s={s} data={data} skill={page as Profession} />}
         {page === 'character' && <CharacterPage s={s} data={data} />}
         {page === 'bags' && <BagsPanel s={s} data={data} />}
         {page === 'town' && <TownPage s={s} data={data} />}
@@ -98,14 +101,14 @@ function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; pag
   const toNext = data.xpToNext[s.char.level] ?? 0;
   const cls = data.classes.find(c => c.id === s.char.cls)?.name;
   const actionPage: Page | null = !s.action ? null : s.action.kind === 'fight' ? 'combat' : s.action.kind === 'travel' ? 'travel' : s.action.kind === 'fish' ? 'fishing'
-    : s.action.kind === 'cook' ? 'cooking' : data.nodes[s.action.node]?.skill ?? null;
+    : s.action.kind === 'craft' ? (data.recipes[s.action.recipe]?.skill ?? null) : data.nodes[s.action.node]?.skill ?? null;
   const item = (p: Page, icon: string, label: string, right?: string) => (
     <button className={`${page === p ? 'on' : ''} ${actionPage === p ? 'active-action' : ''}`} onClick={() => setPage(p)}>
       <Icon name={icon} size="sm" /> {label} {right !== undefined && <span className="lvl">{right}</span>}
     </button>
   );
   const newSpells = trainableSpells(s, data).length, freePoints = talentPoints(s.char.level) - pointsSpent(s);
-  const skill = (p: Profession) => item(p, SKILL_ICON[p], p[0].toUpperCase() + p.slice(1), s.skills[p].max ? `${s.skills[p].level}/${s.skills[p].max}` : '—');
+  const skill = (p: Profession) => item(p, SKILL_ICON[p], SKILL_NAME[p], s.skills[p].max ? `${s.skills[p].level}/${s.skills[p].max}` : '—');
   return (
     <aside className="sidebar">
       <div className="charcard">
@@ -127,9 +130,11 @@ function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; pag
         <div className="group">Adventure</div>
         {item('combat', 'Ability_Warrior_OffensiveStance', 'Combat', String(s.char.level))}
         <div className="group">Gathering</div>
-        {skill('mining')}{skill('herbalism')}{skill('fishing')}
+        {skill('mining')}{skill('herbalism')}{skill('skinning')}{skill('fishing')}
         <div className="group">Production</div>
-        {skill('cooking')}
+        {CRAFTING.filter(p => s.skills[p].max || !PRIMARY_PROFESSIONS.includes(p)).map(p => <span key={p}>{skill(p)}</span>)}
+        {CRAFTING.some(p => PRIMARY_PROFESSIONS.includes(p) && !s.skills[p].max) && <button onClick={() => setPage('town')} className="faint">
+          <Icon name="INV_Misc_Note_01" size="sm" /> Learn a profession…</button>}
         <div className="group">Character</div>
         {item('character', 'INV_Chest_Chain', 'Equipment')}
         {item('spells', 'INV_Misc_Book_09', 'Spellbook', newSpells ? `${newSpells} new` : undefined)}

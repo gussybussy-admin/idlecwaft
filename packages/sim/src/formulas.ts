@@ -107,3 +107,14 @@ export function missChance(attackerSkill: number, defense: number): number {
 export function armorReduction(armor: number, attackerLevel: number): number {
   return Math.min(0.75, armor / (armor + 400 + 85 * attackerLevel));
 }
+
+/** Skinning skill a corpse needs (vanilla: free below level 10, 10 per level to 20, then 5 per level). */
+export function skinningReq(mobLevel: number): number {
+  return mobLevel < 10 ? 1 : mobLevel < 20 ? (mobLevel - 10) * 10 : mobLevel * 5;
+}
+
+/** Enchanting skill needed to disenchant an item of this item level (vanilla brackets). */
+export function disenchantReq(itemLevel: number): number {
+  if (itemLevel <= 20) return 1;
+  return Math.min(300, 25 * Math.ceil((itemLevel - 20) / 5));
+}

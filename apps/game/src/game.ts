@@ -193,6 +193,12 @@ export class Game {
   cancelRequest(request: number): Promise<boolean> {
     return this.request({ t: 'request', id: this.nextId++, op: 'cancel', request });
   }
+  createOrder(recipe: number, count: number, provide: boolean, tip: number, note: string): Promise<boolean> {
+    return this.request({ t: 'order', id: this.nextId++, op: 'create', recipe, count, provide, tip, note });
+  }
+  orderOp(op: 'claim' | 'deliver' | 'cancel', order: number): Promise<boolean> {
+    return this.request({ t: 'order', id: this.nextId++, op, order });
+  }
   chat(text: string): void { this.send({ t: 'chat', text }); }
   markChatRead(reading: boolean): void { this.readingChat = reading; if (reading && this.unreadChat) { this.unreadChat = 0; this.bump(); } }
 

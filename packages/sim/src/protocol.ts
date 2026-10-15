@@ -10,14 +10,24 @@ export interface RosterEntry {
   online: boolean; activity: string; lastSeen: number;
 }
 export interface BankEntry { item: number; count: number }
-export interface BankLogEntry { id: number; t: number; who: string; kind: 'deposit' | 'withdraw' | 'fill'; item: number | null; count: number; gold: number; note: string }
+export interface BankLogEntry { id: number; t: number; who: string; kind: 'deposit' | 'withdraw' | 'fill' | 'order'; item: number | null; count: number; gold: number; note: string }
 export interface GuildRequest { id: number; t: number; who: string; accountId: number; item: number; count: number; filled: number; note: string; open: boolean }
+/**
+ * A crafting order: someone wants `count` crafts of a recipe, optionally handing over the reagents and
+ * a tip up front (held by the guild until the order closes). A crafter claims it (and receives the
+ * reagents), then delivers the items and collects the tip.
+ */
+export interface CraftOrder {
+  id: number; t: number; who: string; accountId: number; recipe: number; count: number;
+  reagents: [number, number][]; tip: number; note: string;
+  crafter: string | null; crafterId: number | null; open: boolean; delivered: boolean;
+}
 export interface ChatMessage { id: number; t: number; who: string; text: string }
 export interface FeedItem { id: number; t: number; who: string; kind: 'level' | 'kill' | 'rank' | 'join'; text: string }
 
 export interface GuildSnapshot {
   name: string; gold: number;
-  roster: RosterEntry[]; bank: BankEntry[]; log: BankLogEntry[]; requests: GuildRequest[];
+  roster: RosterEntry[]; bank: BankEntry[]; log: BankLogEntry[]; requests: GuildRequest[]; orders: CraftOrder[];
   chat: ChatMessage[]; feed: FeedItem[];
 }
 
@@ -30,6 +40,8 @@ export type ClientMessage =
   | { t: 'request'; id: number; op: 'create'; item: number; count: number; note?: string }
   | { t: 'request'; id: number; op: 'fill'; request: number; count: number }
   | { t: 'request'; id: number; op: 'cancel'; request: number }
+  | { t: 'order'; id: number; op: 'create'; recipe: number; count: number; provide: boolean; tip: number; note?: string }
+  | { t: 'order'; id: number; op: 'claim' | 'deliver' | 'cancel'; order: number }
   | { t: 'ping' };
 
 export type ServerMessage =

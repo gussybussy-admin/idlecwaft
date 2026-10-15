@@ -1,7 +1,7 @@
 // The idle engine. `advance` resolves everything that happens between state.now and a target time,
 // one discrete event at a time, using only the RNG stored in the state: same state + same target
 // time = same result, which is what lets the server simulate and clients replay.
-import type { CreatureDef, GameData, ItemDef } from './data.js';
+import type { CreatureDef, GameData, ItemDef, RecipeDef } from './data.js';
 import { factionOfRace } from './data.js';
 import { discoverTaxis, planTravel, RIDING } from './travel.js';
 import {
@@ -11,13 +11,13 @@ import { scaled } from './spells.js';
 import { activeTalentEffects, learnTalent, resetTalents, type TalentEffect } from './talents.js';
 import {
   ARMOR_SKILL, combatSkillupChance, SKILL_DEFENSE, SKILL_UNARMED, WEAPON_SKILL,
-  armorReduction, fishingCatchChance, fishingSkillupChance, gatherColor, healthFromStamina,
+  armorReduction, disenchantReq, skinningReq, fishingCatchChance, fishingSkillupChance, gatherColor, healthFromStamina,
   healthRegenPerSec, killXp, meleeAttackPower, missChance, recipeColor, SKILLUP_CHANCE, STAT,
 } from './formulas.js';
 import { rollLoot, type Drops } from './loot.js';
 import { chance, int } from './rng.js';
 import {
-  addItem, hasItem, log, SLOTS, type Action, type GameState, type Mob, type Profession, type Slot,
+  addItem, hasItem, log, MAX_PRIMARY, PRIMARY_PROFESSIONS, SKILL_NAME, SLOTS, type Action, type GameState, type Mob, type Profession, type Slot,
 } from './state.js';
 
 export const OFFLINE_CAP_MS = 24 * 60 * 60 * 1000;
@@ -27,13 +27,15 @@ export const REVIVE_HP_FRACTION = 0.1;                   // health after resurre
 export const GATHER_MS = 5000;                           // walk to the node + gather cast
 export const FISH_MS: [number, number] = [5000, 18000];  // bobber wait
 export const CRAFT_PAD_MS = 500;                         // between crafts
+export const POTION_COOLDOWN_MS = 120_000;
+export const SKINNING_KNIFE = 7005;
 
 // ---------------------------------------------------------------- events
 
 export type SimEvent =
   | { t: number; type: 'spawn'; mob: Mob }
   | { t: number; type: 'swing'; who: 'player' | 'mob'; result: 'hit' | 'crit' | 'miss' | 'dodge'; dmg: number; spell?: number }
-  | { t: number; type: 'heal'; amount: number; spell: number }
+  | { t: number; type: 'heal'; amount: number; spell: number; item?: number }
   | { t: number; type: 'kill'; creature: number; xp: number; gold: number; items: [number, number][] }
   | { t: number; type: 'death' }
   | { t: number; type: 'revive' }
@@ -80,12 +82,14 @@ export function playerStats(s: GameState, data: GameData): PlayerStats {
   const { race, cls, level } = s.char;
   const base = data.levelStats[race]?.[cls]?.[level] ?? [20, 20, 20, 20, 20];
   let [str, agi, sta, int_, spi] = base;
-  let armor = 0;
+  let armor = 0, enchHp = 0, enchMana = 0, enchAp = 0, enchDmg = 0;
   for (const slot of SLOTS) {
     const it = s.equipment[slot] ? data.items[s.equipment[slot]!] : undefined;
     if (!it) continue;
     armor += it.armor;
-    for (const [type, v] of it.stats) {
+    const ench = s.enchants?.[slot] ? data.enchants?.[s.enchants[slot]!] : undefined;
+    if (ench) { armor += ench.armor; enchHp += ench.hp; enchMana += ench.mana; enchAp += ench.ap; if (slot === 'mainhand') enchDmg += ench.dmg; }
+    for (const [type, v] of [...it.stats, ...(ench?.stats ?? [])]) {
       if (type === STAT.STR) str += v; else if (type === STAT.AGI) agi += v; else if (type === STAT.STA) sta += v;
       else if (type === STAT.INT) int_ += v; else if (type === STAT.SPI) spi += v;
     }
@@ -108,16 +112,16 @@ export function playerStats(s: GameState, data: GameData): PlayerStats {
   armor += agi * 2 + p.armor + sum('armor', e => (e as { amount: number }).amount);
   armor = Math.round(armor * (1 + sum('armorPct', e => (e as { pct: number }).pct) / 100));
   const baseHp = data.classStats[cls]?.[level]?.[0] ?? 20;
-  const ap = meleeAttackPower(cls, level, str, agi) + p.ap + sum('ap', e => (e as { amount: number }).amount);
+  const ap = meleeAttackPower(cls, level, str, agi) + p.ap + enchAp + sum('ap', e => (e as { amount: number }).amount);
   const weapon = s.equipment.mainhand ? data.items[s.equipment.mainhand] : undefined;
   const speedMs = weapon?.delayMs || 2000;
   const bonus = (ap / 14) * (speedMs / 1000);
   return {
     str, agi, sta, int: int_, spi, armor, ap, speedMs,
-    maxHp: Math.round((baseHp + healthFromStamina(sta)) * (1 + sum('healthPct', e => (e as { pct: number }).pct) / 100)),
-    maxMana: Math.round(maxMana(s, data, int_) * (1 + sum('manaPct', e => (e as { pct: number }).pct) / 100)),
-    dmgMin: Math.max(1, Math.round((weapon?.dmgMin || 1) + bonus)),
-    dmgMax: Math.max(1, Math.round((weapon?.dmgMax || 2) + bonus)),
+    maxHp: Math.round((baseHp + healthFromStamina(sta)) * (1 + sum('healthPct', e => (e as { pct: number }).pct) / 100)) + enchHp,
+    maxMana: maxMana(s, data, int_) ? Math.round(maxMana(s, data, int_) * (1 + sum('manaPct', e => (e as { pct: number }).pct) / 100)) + enchMana : 0,
+    dmgMin: Math.max(1, Math.round((weapon?.dmgMin || 1) + bonus + enchDmg)),
+    dmgMax: Math.max(1, Math.round((weapon?.dmgMax || 2) + bonus + enchDmg)),
     crit: Math.min(60, 5 + agi / 20 + sum('meleeCrit', e => (e as { pct: number }).pct)),
     spellCrit: Math.min(50, 5 + int_ / 60 + sum('spellCrit', e => (e as { pct: number }).pct)),
     meleeHit: sum('meleeHit', e => (e as { pct: number }).pct),
@@ -213,7 +217,7 @@ function step(s: GameState, data: GameData, emit: Emit): void {
     case 'fight': return stepFight(s, data, a.creature, emit);
     case 'gather': return stepGather(s, data, a.node, emit);
     case 'fish': return stepFish(s, data, emit);
-    case 'cook': return stepCook(s, data, a.recipe, emit);
+    case 'craft': return stepCraft(s, data, a.recipe, emit);
     case 'travel': return stepTravel(s, data, a.to, emit);
   }
 }
@@ -326,7 +330,22 @@ function stepFight(s: GameState, data: GameData, creatureId: number, emit: Emit)
     s.phase = { p: 'dead', from: s.now, until: s.now + DEATH_MS };
     return;
   }
+  maybePotion(s, data, st, emit);
   if (mob.hp <= 0) return onKill(s, data, def, mob, emit);
+}
+
+/** Drink a healing potion when a fight goes badly (one per 2 minutes, the smallest that is enough). */
+function maybePotion(s: GameState, data: GameData, st: PlayerStats, emit: Emit): void {
+  if (s.char.hp >= st.maxHp * s.settings.potionBelowPct / 100 || (s.potionReadyAt ?? 0) > s.now) return;
+  const pots = Object.keys(s.inventory).map(Number).map(id => data.items[id])
+    .filter((it): it is ItemDef => !!it?.potion?.heal && it.reqLevel <= s.char.level).sort((a, b) => a.potion!.heal - b.potion!.heal);
+  if (!pots.length) return;
+  const missing = st.maxHp - s.char.hp;
+  const pick = pots.find(p => p.potion!.heal >= missing) ?? pots[pots.length - 1];
+  addItem(s, pick.id, -1);
+  s.char.hp = Math.min(st.maxHp, s.char.hp + pick.potion!.heal);
+  s.potionReadyAt = s.now + POTION_COOLDOWN_MS;
+  emit({ t: s.now, type: 'heal', amount: pick.potion!.heal, spell: 0, item: pick.id });
 }
 
 /** The weapon skill your current main hand uses (Unarmed without a weapon). */
@@ -353,10 +372,24 @@ function onKill(s: GameState, data: GameData, def: CreatureDef, mob: Mob, emit: 
   const items = [...drops];
   emit({ t: s.now, type: 'kill', creature: def.id, xp, gold, items });
   if (items.length) log(s, 'loot', `${def.name}: ${items.map(([i, n]) => `${data.items[i]?.name ?? i}${n > 1 ? ` x${n}` : ''}`).join(', ')}`);
+  maybeSkin(s, data, def, mob, emit);
   gainXp(s, data, xp, emit);
   const st = playerStats(s, data);
   if (s.char.hp < st.maxHp * s.settings.restBelowPct / 100) startRest(s, data, emit);
   else s.phase = { p: 'search', from: s.now, until: s.now + int(s.rng, ...SEARCH_MS) };
+}
+
+/** Skin the corpse when you can (Skinning trained, a knife, enough skill). */
+function maybeSkin(s: GameState, data: GameData, def: CreatureDef, mob: Mob, emit: Emit): void {
+  const sk = s.skills.skinning;
+  if (!def.skin || !sk?.max || !s.settings.autoSkin || !hasItem(s, SKINNING_KNIFE)) return;
+  const req = skinningReq(mob.level);
+  if (sk.level < req) return;
+  const drops = rollLoot(data, def.skin, s.rng);
+  for (const [i, n] of drops) addItem(s, i, n);
+  s.stats.skinned++;
+  emit({ t: s.now, type: 'harvest', skill: 'skinning', items: [...drops] });
+  skillUp(s, 'skinning', SKILLUP_CHANCE[gatherColor(sk.level, req)], emit);
 }
 
 function gainXp(s: GameState, data: GameData, xp: number, emit: Emit): void {
@@ -441,7 +474,7 @@ function skillUp(s: GameState, skill: Profession, pct: number, emit: Emit): void
   const sk = s.skills[skill];
   if (sk.level >= sk.max || !chance(s.rng, pct)) return;
   sk.level++;
-  log(s, 'skill', `Your skill in ${cap(skill)} has increased to ${sk.level}.`);
+  log(s, 'skill', `Your skill in ${SKILL_NAME[skill]} has increased to ${sk.level}.`);
   emit({ t: s.now, type: 'skillup', skill, level: sk.level });
 }
 
@@ -483,21 +516,44 @@ function stepFish(s: GameState, data: GameData, emit: Emit): void {
   s.phase = { p: 'idle' };
 }
 
-function stepCook(s: GameState, data: GameData, recipeId: number, emit: Emit): void {
+function stepCraft(s: GameState, data: GameData, recipeId: number, emit: Emit): void {
   const r = data.recipes[recipeId];
+  const a = s.action as Extract<Action, { kind: 'craft' }>;
   if (!r) return stop(s, 'Unknown recipe.', emit);
   if (s.phase.p !== 'work') {
-    const err = canCook(s, data, recipeId);
+    if (a.count !== undefined && a.count <= 0) { s.action = null; s.phase = { p: 'idle' }; return; }
+    const err = canCraft(s, data, recipeId, a.slot);
     if (err) return stop(s, err, emit);
     s.phase = { p: 'work', from: s.now, until: s.now + r.castMs + CRAFT_PAD_MS };
     return;
   }
+  // Reagents can vanish mid-cast (sold, deposited): check again before using them.
+  const err = canCraft(s, data, recipeId, a.slot);
+  if (err) return stop(s, err, emit);
   for (const [i, n] of r.reagents) addItem(s, i, -n);
-  addItem(s, r.item, r.count);
-  s.stats.cooked++;
-  emit({ t: s.now, type: 'harvest', skill: 'cooking', items: [[r.item, r.count]] });
-  skillUp(s, 'cooking', SKILLUP_CHANCE[recipeColor(s.skills.cooking.level, r)], emit);
+  if (r.enchant) {
+    const slot = enchantSlot(s, data, r, a.slot)!;
+    s.enchants[slot] = r.enchant.id;
+    log(s, 'skill', `${data.enchants[r.enchant.id]?.name ?? r.name} on your ${data.items[s.equipment[slot]!]?.name}.`);
+  } else addItem(s, r.item, r.count);
+  if (r.skill === 'cooking') s.stats.cooked++; else s.stats.crafted++;
+  emit({ t: s.now, type: 'harvest', skill: r.skill, items: r.item ? [[r.item, r.count]] : [] });
+  skillUp(s, r.skill, SKILLUP_CHANCE[recipeColor(s.skills[r.skill].level, r)], emit);
+  if (a.count !== undefined) a.count--;
   s.phase = { p: 'idle' };
+}
+
+/** Which of your equipped items an enchantment would go on (the chosen slot, else the first that fits). */
+export function enchantSlot(s: GameState, data: GameData, r: RecipeDef, want?: Slot): Slot | null {
+  if (!r.enchant) return null;
+  const fits = (slot: Slot) => {
+    const it = s.equipment[slot] ? data.items[s.equipment[slot]!] : undefined;
+    if (!it) return false;
+    if (r.enchant!.itemClass >= 0 && it.class !== r.enchant!.itemClass) return false;
+    return !r.enchant!.invMask || !!(r.enchant!.invMask & (1 << it.invType));
+  };
+  if (want) return fits(want) ? want : null;
+  return SLOTS.find(fits) ?? null;
 }
 
 // ---------------------------------------------------------------- validation
@@ -506,8 +562,8 @@ export function canGather(s: GameState, data: GameData, nodeId: number): string 
   const node = data.nodes[nodeId];
   if (!node) return 'Unknown node.';
   const sk = s.skills[node.skill];
-  if (!sk.max) return `You need to train ${cap(node.skill)} first.`;
-  if (sk.level < node.reqSkill) return `Requires ${cap(node.skill)} ${node.reqSkill}.`;
+  if (!sk.max) return `You need to train ${SKILL_NAME[node.skill]} first.`;
+  if (sk.level < node.reqSkill) return `Requires ${SKILL_NAME[node.skill]} ${node.reqSkill}.`;
   if (node.skill === 'mining' && !hasTool(s, data, 'mining-pick')) return 'Requires a Mining Pick.';
   if (!data.zones.find(z => z.id === s.zone)?.nodes.some(n => n.id === nodeId)) return `There is no ${node.name} here.`;
   return null;
@@ -520,12 +576,14 @@ export function canFish(s: GameState, data: GameData): string | null {
   return null;
 }
 
-export function canCook(s: GameState, data: GameData, recipeId: number): string | null {
+export function canCraft(s: GameState, data: GameData, recipeId: number, slot?: Slot): string | null {
   const r = data.recipes[recipeId];
   if (!r) return 'Unknown recipe.';
-  if (!s.skills.cooking.max) return 'You need to train Cooking first.';
+  if (!s.skills[r.skill]?.max) return `You need to train ${SKILL_NAME[r.skill]} first.`;
   if (!s.recipes.includes(recipeId)) return `You don't know ${r.name}.`;
   for (const [i, n] of r.reagents) if (!hasItem(s, i, n)) return `Out of ${data.items[i]?.name ?? 'reagents'}.`;
+  for (const tool of r.tools ?? []) if (!hasItem(s, tool) && !SLOTS.some(sl => s.equipment[sl] === tool)) return `Requires ${data.items[tool]?.name ?? 'a tool'}.`;
+  if (r.enchant && !enchantSlot(s, data, r, slot)) return `Nothing equipped that ${r.name} can go on.`;
   return null;
 }
 
@@ -615,7 +673,7 @@ export function startAction(s: GameState, data: GameData, action: Action): Comma
     : action.kind === 'gather' ? canGather(s, data, action.node)
     : action.kind === 'fish' ? canFish(s, data)
     : action.kind === 'travel' ? canTravel(s, data, action.to)
-    : canCook(s, data, action.recipe);
+    : canCraft(s, data, action.recipe, action.slot);
   if (err) return fail(err);
   if (s.phase.p === 'dead') return fail('You are dead. Wait to resurrect.');
   if (s.action?.kind === 'travel' && s.phase.p === 'work') return fail("You're travelling. Wait until you arrive.");
@@ -637,18 +695,19 @@ export function train(s: GameState, data: GameData, skill: Profession): CommandR
   const sk = s.skills[skill];
   const next = ranks.find(r => r.max > sk.max);
   if (!next) return fail('Already at the highest rank.');
-  if (sk.max && sk.level < sk.max - 25) return fail(`Requires ${cap(skill)} ${sk.max - 25} to train ${next.name}.`);
+  if (!sk.max && PRIMARY_PROFESSIONS.includes(skill) && PRIMARY_PROFESSIONS.filter(p => s.skills[p]?.max).length >= MAX_PRIMARY) {
+    return fail(`You already know ${MAX_PRIMARY} primary professions. Unlearn one first.`);
+  }
+  if (sk.max && sk.level < sk.max - 25) return fail(`Requires ${SKILL_NAME[skill]} ${sk.max - 25} to train ${next.name}.`);
   if (s.char.level < next.reqLevel) return fail(`Requires level ${next.reqLevel}.`);
   if (s.gold < next.cost) return fail(`Costs ${formatMoney(next.cost)}.`);
   s.gold -= next.cost;
   sk.max = next.max;
   if (!sk.level) sk.level = 1;
-  if (skill === 'cooking') {
-    for (const r of Object.values(data.recipes)) {
-      if ('trainer' in r.source && r.source.trainer === 0 && !s.recipes.includes(r.spellId)) s.recipes.push(r.spellId);
-    }
+  for (const r of Object.values(data.recipes)) {
+    if (r.skill === skill && 'trainer' in r.source && r.source.trainer === 0 && r.orange <= sk.level && !s.recipes.includes(r.spellId)) s.recipes.push(r.spellId);
   }
-  log(s, 'skill', `You are now ${/^[AEIOU]/.test(next.name) ? 'an' : 'a'} ${next.name} in ${cap(skill)} (max ${next.max}).`);
+  log(s, 'skill', `You are now ${/^[AEIOU]/.test(next.name) ? 'an' : 'a'} ${next.name} in ${SKILL_NAME[skill]} (max ${next.max}).`);
   return ok;
 }
 
@@ -656,8 +715,9 @@ export function learnRecipe(s: GameState, data: GameData, recipeId: number): Com
   const r = data.recipes[recipeId];
   if (!r) return fail('Unknown recipe.');
   if (s.recipes.includes(recipeId)) return fail('Already known.');
-  if (!s.skills.cooking.max) return fail('Train Cooking first.');
-  if (s.skills.cooking.level < r.orange) return fail(`Requires Cooking ${r.orange}.`);
+  const sk = s.skills[r.skill];
+  if (!sk?.max) return fail(`Train ${SKILL_NAME[r.skill]} first.`);
+  if (sk.level < r.orange) return fail(`Requires ${SKILL_NAME[r.skill]} ${r.orange}.`);
   if ('trainer' in r.source) {
     if (s.gold < r.source.trainer) return fail(`Costs ${formatMoney(r.source.trainer)}.`);
     s.gold -= r.source.trainer;
@@ -667,6 +727,43 @@ export function learnRecipe(s: GameState, data: GameData, recipeId: number): Com
   }
   s.recipes.push(recipeId);
   log(s, 'skill', `You have learned how to create ${r.name}.`);
+  return ok;
+}
+
+/** Forget a profession entirely (skill and recipes), e.g. to make room for another primary one. */
+export function unlearnProfession(s: GameState, data: GameData, skill: Profession): CommandResult {
+  if (!s.skills[skill]?.max) return fail(`You don't know ${SKILL_NAME[skill]}.`);
+  if (s.action && actionSkill(s.action, data) === skill) { s.action = null; s.phase = { p: 'idle' }; }
+  s.skills[skill] = { level: 0, max: 0 };
+  s.recipes = s.recipes.filter(id => data.recipes[id]?.skill !== skill);
+  log(s, 'skill', `You have unlearned ${SKILL_NAME[skill]}.`);
+  return ok;
+}
+
+/** The profession an action trains, if any. */
+export function actionSkill(a: Action, data: GameData): Profession | null {
+  switch (a.kind) {
+    case 'gather': return data.nodes[a.node]?.skill ?? null;
+    case 'fish': return 'fishing';
+    case 'craft': return data.recipes[a.recipe]?.skill ?? null;
+    default: return null;
+  }
+}
+
+/** Disenchant an uncommon-or-better weapon or armor into enchanting materials. */
+export function disenchant(s: GameState, data: GameData, item: number): CommandResult {
+  const it = data.items[item];
+  if (!it || !hasItem(s, item)) return fail("You don't have that.");
+  const sk = s.skills.enchanting;
+  if (!sk?.max) return fail('You need to train Enchanting first.');
+  if (!it.disenchant || it.quality < 2) return fail(`${it.name} can't be disenchanted.`);
+  const req = disenchantReq(it.itemLevel ?? it.reqLevel);
+  if (sk.level < req) return fail(`Requires Enchanting ${req}.`);
+  addItem(s, item, -1);
+  const drops = rollLoot(data, it.disenchant, s.rng);
+  for (const [i, n] of drops) addItem(s, i, n);
+  log(s, 'loot', `Disenchanted ${it.name}: ${[...drops].map(([i, n]) => `${data.items[i]?.name ?? i}${n > 1 ? ` x${n}` : ''}`).join(', ') || 'nothing'}.`);
+  skillUp(s, 'enchanting', SKILLUP_CHANCE[gatherColor(sk.level, req)], () => {});
   return ok;
 }
 
@@ -730,9 +827,10 @@ export function equip(s: GameState, data: GameData, item: number): CommandResult
   addItem(s, item, -1);
   if (s.equipment[slot]) addItem(s, s.equipment[slot]!, 1);
   s.equipment[slot] = item;
-  if (slot === 'mainhand' && it.invType === TWO_HAND && s.equipment.offhand) { addItem(s, s.equipment.offhand, 1); delete s.equipment.offhand; }
+  delete s.enchants[slot];
+  if (slot === 'mainhand' && it.invType === TWO_HAND && s.equipment.offhand) { addItem(s, s.equipment.offhand, 1); delete s.equipment.offhand; delete s.enchants.offhand; }
   if (slot === 'offhand' && s.equipment.mainhand && data.items[s.equipment.mainhand]?.invType === TWO_HAND) {
-    addItem(s, s.equipment.mainhand, 1); delete s.equipment.mainhand;
+    addItem(s, s.equipment.mainhand, 1); delete s.equipment.mainhand; delete s.enchants.mainhand;
   }
   s.char.hp = Math.min(s.char.hp, playerStats(s, data).maxHp);
   return ok;
@@ -744,6 +842,7 @@ export function unequip(s: GameState, data: GameData, slot: Slot): CommandResult
   if (s.phase.p === 'combat') return fail("You can't change equipment in combat.");
   addItem(s, id, 1);
   delete s.equipment[slot];
+  delete s.enchants[slot];
   s.char.hp = Math.min(s.char.hp, playerStats(s, data).maxHp);
   return ok;
 }
