@@ -37,3 +37,7 @@ server.config.json
 
 # Converted asset outputs (should only ever be under cache/, but just in case)
 **/public/assets/
+
+# launcher swaps (self-update and rebuilds while running)
+*.exe.old
+*.exe.download

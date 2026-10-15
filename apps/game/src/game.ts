@@ -172,11 +172,14 @@ export class Game {
     this.send({ t: 'create', name, race, cls, look });
   }
 
-  /** Sends a command to the server; it's applied locally right away and the server's snapshot confirms it. */
+  /**
+   * Sends a command to the server; it's applied locally right away and the server's snapshot confirms it.
+   * A command the local preview rejects is still sent: the server decides (its rules may be newer than
+   * this client's), and its answer shows the error if there really is one.
+   */
   async command(cmd: Command): Promise<boolean> {
     if (!this.state) return false;
-    const preview = applyCommand(this.state, this.data, cmd); // instant feedback; the server snapshot is the truth
-    if (!preview.ok) { this.showToast(preview.error); this.bump(); return false; }
+    applyCommand(this.state, this.data, cmd); // instant feedback; the server snapshot is the truth
     this.bump();
     return this.request({ t: 'cmd', id: this.nextId++, cmd });
   }

@@ -69,6 +69,14 @@ console.log(`\nbuilt ${path.relative(root, exe)} (${(fs.statSync(exe).size / 102
 if (process.platform === 'win32') {
   const committed = path.join(root, 'release', path.basename(exe));
   fs.mkdirSync(path.dirname(committed), { recursive: true });
-  fs.copyFileSync(exe, committed);
-  console.log(`copied to ${path.relative(root, committed)} — commit it to publish the new version`);
+  try { fs.rmSync(`${committed}.old`, { force: true }); } catch { /* still running from an earlier swap */ }
+  try {
+    fs.copyFileSync(exe, committed);
+  } catch (e) {
+    if (e.code !== 'EBUSY' && e.code !== 'EPERM') throw e;
+    // The host is running this very exe: Windows won't overwrite it but lets it be renamed aside.
+    fs.renameSync(committed, `${committed}.old`);
+    fs.copyFileSync(exe, committed);
+  }
+  console.log(`copied to ${path.relative(root, committed)} — the guild server offers it to launchers right away; commit it for GitHub`);
 }
