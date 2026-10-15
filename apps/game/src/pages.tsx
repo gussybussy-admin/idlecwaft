@@ -1,9 +1,8 @@
 // Game pages: combat, gathering, fishing, cooking, character, town, log.
 import { useEffect, useRef, useState } from 'react';
 import {
-  buy, canCook, canFish, canGather, equip, equipSlots, fishingCatchChance, gatherColor, killXp, learnRecipe,
-  playerStats, recipeColor, sell, SLOTS, startAction, stopAction, train, unequip,
-  type GameData, type GameState, type Profession, type SimEvent, type Slot,
+  canCook, canFish, canGather, equipSlots, fishingCatchChance, gatherColor, killXp,
+  playerStats, recipeColor, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
 } from '@idle/sim';
 import { game } from './game.js';
 import { Diorama, type Activity } from './diorama.js';
@@ -27,7 +26,7 @@ export function CombatPage({ s, data }: P) {
   return (
     <>
       <div className="panel-head"><h2>{zone.name}</h2><span className="muted">Levels {zone.levelMin}-{zone.levelMax}</span><span className="spacer" />
-        {s.action && <button className="btn secondary" onClick={() => game.command(stopAction)}>Stop</button>}</div>
+        {s.action && <button className="btn secondary" onClick={() => game.command({ name: 'stop' })}>Stop</button>}</div>
       <CombatScene s={s} data={data} />
       <div className="panel">
         <div className="panel-head"><h3>Creatures</h3><span className="spacer" />
@@ -56,8 +55,8 @@ export function CombatPage({ s, data }: P) {
                   </span>))}</div>
                 <div className="btn-row">
                   {fighting === id
-                    ? <button className="btn secondary" onClick={() => game.command(stopAction)}>Stop</button>
-                    : <button className="btn" onClick={() => game.command((st, dd) => startAction(st, dd, { kind: 'fight', creature: id }))}>Fight</button>}
+                    ? <button className="btn secondary" onClick={() => game.command({ name: 'stop' })}>Stop</button>
+                    : <button className="btn" onClick={() => game.command({ name: 'start', action: { kind: 'fight', creature: id } })}>Fight</button>}
                 </div>
               </div>
             );
@@ -173,8 +172,8 @@ export function GatherPage({ s, data, skill }: P & { skill: 'mining' | 'herbalis
               {current === id && <WorkBar s={s} />}
               <div className="btn-row">
                 {current === id
-                  ? <button className="btn secondary" onClick={() => game.command(stopAction)}>Stop</button>
-                  : <button className="btn" disabled={!!err} title={err ?? ''} onClick={() => game.command((st, d) => startAction(st, d, { kind: 'gather', node: id }))}>{skill === 'mining' ? 'Mine' : 'Gather'}</button>}
+                  ? <button className="btn secondary" onClick={() => game.command({ name: 'stop' })}>Stop</button>
+                  : <button className="btn" disabled={!!err} title={err ?? ''} onClick={() => game.command({ name: 'start', action: { kind: 'gather', node: id } })}>{skill === 'mining' ? 'Mine' : 'Gather'}</button>}
                 {err && <span className="faint" style={{ fontSize: 12 }}>{err}</span>}
               </div>
             </div>
@@ -205,8 +204,8 @@ export function FishingPage({ s, data }: P) {
             <span key={i} {...withTip(() => <><ItemTooltip item={data.items[i]} data={data} /><div className="t-muted">~{p.toFixed(p < 1 ? 2 : 0)}% of catches</div></>)}><ItemIcon id={i} data={data} /></span>))}</div>
           {active && <WorkBar s={s} />}
           <div className="btn-row">
-            {active ? <button className="btn secondary" onClick={() => game.command(stopAction)}>Stop</button>
-              : <button className="btn" disabled={!!err} onClick={() => game.command((st, d) => startAction(st, d, { kind: 'fish' }))}>Fish</button>}
+            {active ? <button className="btn secondary" onClick={() => game.command({ name: 'stop' })}>Stop</button>
+              : <button className="btn" disabled={!!err} onClick={() => game.command({ name: 'start', action: { kind: 'fish' } })}>Fish</button>}
             {err && <span className="faint" style={{ fontSize: 12 }}>{err}</span>}
           </div>
         </div>
@@ -241,10 +240,10 @@ export function CookingPage({ s, data }: P) {
               <div className="meta"><span className="c-orange">{r.orange}</span> · <span className="c-yellow">{r.yellow}</span> · <span className="c-green">{r.green}</span> · <span className="c-grey">{r.grey}</span></div>
               {current === r.spellId && <WorkBar s={s} />}
               <div className="btn-row">
-                {!known ? <button className="btn secondary" onClick={() => game.command((st, d) => learnRecipe(st, d, r.spellId))}>
+                {!known ? <button className="btn secondary" onClick={() => game.command({ name: 'learnRecipe', recipe: r.spellId })}>
                   Learn {'trainer' in r.source ? (r.source.trainer ? <Money copper={r.source.trainer} /> : '') : 'from recipe'}</button>
-                  : current === r.spellId ? <button className="btn secondary" onClick={() => game.command(stopAction)}>Stop</button>
-                  : <button className="btn" disabled={!!err} title={err ?? ''} onClick={() => game.command((st, d) => startAction(st, d, { kind: 'cook', recipe: r.spellId }))}>Cook</button>}
+                  : current === r.spellId ? <button className="btn secondary" onClick={() => game.command({ name: 'stop' })}>Stop</button>
+                  : <button className="btn" disabled={!!err} title={err ?? ''} onClick={() => game.command({ name: 'start', action: { kind: 'cook', recipe: r.spellId } })}>Cook</button>}
                 {known && err && <span className="faint" style={{ fontSize: 12 }}>{err}</span>}
               </div>
             </div>
@@ -266,7 +265,7 @@ function SkillHeader({ s, data, skill }: P & { skill: Profession }) {
         <Icon name={SKILL_ICON[skill]} size="lg" />
         <div><h2>{cap(skill)}</h2><div className="muted">{sk.max ? `${rankName(data, skill, sk.max)} · ${sk.level} / ${sk.max}` : 'Not trained'}</div></div>
         <span className="spacer" />
-        {next && <button className="btn secondary" onClick={() => game.command((st, d) => train(st, d, skill))}>
+        {next && <button className="btn secondary" onClick={() => game.command({ name: 'train', skill })}>
           Train {next.name} {next.cost ? <Money copper={next.cost} /> : ''}{next.reqLevel > s.char.level ? ` (level ${next.reqLevel})` : ''}</button>}
       </div>
       {sk.max > 0 && <Bar kind="xp" value={sk.level} max={sk.max} label={`${sk.level} / ${sk.max}`} />}
@@ -307,7 +306,7 @@ export function CharacterPage({ s, data }: P) {
     const id = s.equipment[sl];
     return (
       <div key={sl} className="eqslot" style={id ? undefined : { backgroundImage: `url(ui/ui-paperdoll-slot-${SLOT_ICON[sl]}.png)` }}
-        onClick={() => id && game.command((g, d) => unequip(g, d, sl))} title={id ? 'Click to unequip' : sl}>
+        onClick={() => id && game.command({ name: 'unequip', slot: sl })} title={id ? 'Click to unequip' : sl}>
         {id ? <ItemIcon id={id} data={data} /> : null}
       </div>
     );
@@ -354,10 +353,7 @@ export function BagsPanel({ s, data }: P) {
   return (
     <div className="panel">
       <div className="panel-head"><h3>Bags</h3><span className="muted">{items.length} item types</span><span className="spacer" />
-        {junkValue > 0 && <button className="btn secondary small" onClick={() => game.command((g, d) => {
-          for (const [id, n] of Object.entries(g.inventory)) if (d.items[+id]?.quality === 0) sell(g, d, +id, n);
-          return { ok: true };
-        })}>Sell junk (<Money copper={junkValue} />)</button>}</div>
+        {junkValue > 0 && <button className="btn secondary small" onClick={() => game.command({ name: 'sellJunk' })}>Sell junk (<Money copper={junkValue} />)</button>}</div>
       <div className="bag">{items.map(([id, n]) => (
         <div key={id} className={`slot ${sel === id ? 'sel' : ''}`} onClick={() => setSel(sel === id ? null : id)}><ItemIcon id={id} data={data} count={n} /></div>
       ))}{!items.length && <span className="muted">Your bags are empty.</span>}</div>
@@ -365,9 +361,9 @@ export function BagsPanel({ s, data }: P) {
         <div className="card" style={{ marginTop: 12, maxWidth: 520 }}>
           <div className="row"><ItemIcon id={it.id} data={data} size="lg" /><div><div className={`title q${it.quality}`}>{it.name}</div><div className="meta">You have {count}</div></div></div>
           <div className="btn-row">
-            {equipSlots(it).length > 0 && <button className="btn" onClick={() => { game.command((g, d) => equip(g, d, it.id)); setSel(null); }}>Equip</button>}
-            {it.sellPrice > 0 && <button className="btn secondary" onClick={() => game.command((g, d) => sell(g, d, it.id, 1))}>Sell 1 (<Money copper={it.sellPrice} />)</button>}
-            {it.sellPrice > 0 && count > 1 && <button className="btn secondary" onClick={() => { game.command((g, d) => sell(g, d, it.id, count)); setSel(null); }}>Sell all (<Money copper={it.sellPrice * count} />)</button>}
+            {equipSlots(it).length > 0 && <button className="btn" onClick={() => { game.command({ name: 'equip', item: it.id }); setSel(null); }}>Equip</button>}
+            {it.sellPrice > 0 && <button className="btn secondary" onClick={() => game.command({ name: 'sell', item: it.id, count: 1 })}>Sell 1 (<Money copper={it.sellPrice} />)</button>}
+            {it.sellPrice > 0 && count > 1 && <button className="btn secondary" onClick={() => { game.command({ name: 'sell', item: it.id, count: count }); setSel(null); }}>Sell all (<Money copper={it.sellPrice * count} />)</button>}
           </div>
         </div>
       )}
@@ -400,7 +396,7 @@ export function TownPage({ s, data }: P) {
               <div key={skill} className="card">
                 <div className="row"><Icon name={SKILL_ICON[skill]} /><div><div className="title">{cap(skill)}</div>
                   <div className="meta">{sk.max ? `${sk.level} / ${sk.max}` : 'Not trained'}</div></div></div>
-                {next ? <button className="btn secondary" onClick={() => game.command((g, d) => train(g, d, skill))}>
+                {next ? <button className="btn secondary" onClick={() => game.command({ name: 'train', skill })}>
                   {next.name} ({next.max}) {next.cost ? <Money copper={next.cost} /> : 'free'}{next.reqLevel > s.char.level ? ` · lvl ${next.reqLevel}` : ''}</button>
                   : <span className="muted">Max rank</span>}
               </div>
@@ -418,8 +414,8 @@ export function TownPage({ s, data }: P) {
             return (
               <div key={item} className="card">
                 <div className="row"><ItemIcon id={item} data={data} /><div style={{ minWidth: 0 }}><div className={`title q${it.quality}`}>{it.name}</div><div className="meta">{vendor}</div></div></div>
-                <div className="btn-row"><button className="btn secondary small" onClick={() => game.command((g, d) => buy(g, d, item, 1))}>Buy <Money copper={it.buyPrice} /></button>
-                  {it.stack > 1 && <button className="btn secondary small" onClick={() => game.command((g, d) => buy(g, d, item, 5))}>x5 <Money copper={it.buyPrice * 5} /></button>}</div>
+                <div className="btn-row"><button className="btn secondary small" onClick={() => game.command({ name: 'buy', item, count: 1 })}>Buy <Money copper={it.buyPrice} /></button>
+                  {it.stack > 1 && <button className="btn secondary small" onClick={() => game.command({ name: 'buy', item, count: 5 })}>x5 <Money copper={it.buyPrice * 5} /></button>}</div>
               </div>
             );
           })}
@@ -432,28 +428,23 @@ export function TownPage({ s, data }: P) {
 // ================================================================ log + settings
 
 export function LogPage({ s }: P) {
-  const [exportText, setExportText] = useState('');
-  const [importText, setImportText] = useState('');
   return (
     <>
       <div className="panel"><div className="panel-head"><h3>Activity log</h3></div>
         <div className="log">{[...s.log].reverse().map((l, i) => <div key={i} className={l.kind}><span className="faint">{new Date(l.t).toLocaleTimeString()}</span> {l.text}</div>)}</div></div>
       <div className="panel"><div className="panel-head"><h3>Settings</h3></div>
         <div className="btn-row">
-          <label><input type="checkbox" checked={s.settings.autoEat} onChange={e => game.command(g => { g.settings.autoEat = e.target.checked; return { ok: true }; })} /> Eat food while resting</label>
+          <label><input type="checkbox" checked={s.settings.autoEat} onChange={e => game.command({ name: 'settings', autoEat: e.target.checked })} /> Eat food while resting</label>
           <label className="muted">below <input type="number" min={10} max={99} value={s.settings.eatBelowPct} style={{ width: 52 }}
-            onChange={e => game.command(g => { g.settings.eatBelowPct = Math.max(10, Math.min(99, +e.target.value || 50)); return { ok: true }; })} />% health</label>
+            onChange={e => game.command({ name: 'settings', eatBelowPct: Math.max(10, Math.min(99, +e.target.value || 50)) })} />% health</label>
         </div>
       </div>
-      <div className="panel"><div className="panel-head"><h3>Save</h3></div>
-        <p className="muted" style={{ marginTop: 0 }}>Saved automatically in this browser. Export to back it up or move it.</p>
-        <div className="btn-row">
-          <button className="btn secondary" onClick={() => setExportText(game.exportSave())}>Export</button>
-          <button className="btn secondary" onClick={() => { if (!game.importSave(importText)) game.showToast('That save could not be read.'); }}>Import</button>
-          <button className="btn secondary" onClick={() => { if (confirm('Delete this character and start over?')) game.resetSave(); }}>Delete character</button>
-        </div>
-        {exportText && <textarea className="text" style={{ width: '100%', height: 80, marginTop: 8 }} readOnly value={exportText} />}
-        <input className="text" style={{ marginTop: 8 }} placeholder="Paste an exported save to import" value={importText} onChange={e => setImportText(e.target.value)} />
+      <div className="panel"><div className="panel-head"><h3>Account</h3></div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Logged in as <b>{game.account?.username}</b> on {game.serverUrl}. Your character lives on the guild server and keeps
+          progressing for up to 24 hours after you were last online.
+        </p>
+        <div className="btn-row"><button className="btn secondary" onClick={() => game.logout()}>Log out</button></div>
       </div>
     </>
   );

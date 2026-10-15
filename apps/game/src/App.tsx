@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { playerStats, type GameData, type GameState, type Profession, type Summary } from '@idle/sim';
 import { game } from './game.js';
+import { GuildPage } from './guild.js';
 import { BagsPanel, CharacterPage, CombatPage, CookingPage, FishingPage, GatherPage, LogPage, SKILL_ICON, TownPage } from './pages.js';
 import { Bar, fmtTime, Icon, ItemIcon, Money, TooltipHost } from './ui.js';
 import { randomLook, type Look } from './character.js';
@@ -15,24 +16,27 @@ function CharacterPreview({ look }: { look: Look }) {
   return <div className="diorama" ref={host} style={{ height: 260, marginTop: 10 }} />;
 }
 
-type Page = 'combat' | Profession | 'character' | 'bags' | 'town' | 'log';
+type Page = 'combat' | Profession | 'character' | 'bags' | 'town' | 'guild' | 'log';
 
 export function App() {
   useSyncExternalStore(game.subscribe, game.getVersion);
-  const [ready, setReady] = useState<'loading' | 'ok' | string>('loading');
+  const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState<Page>(() => { try { return (localStorage.getItem('idlecwaft.page') as Page) || 'combat'; } catch { return 'combat'; } });
-  useEffect(() => { game.load().then(() => setReady('ok'), e => setReady(String(e.message ?? e))); return () => game.dispose(); }, []);
+  useEffect(() => { game.start().catch(e => setError(String(e.message ?? e))); return () => game.dispose(); }, []);
   useEffect(() => { try { localStorage.setItem('idlecwaft.page', page); } catch { /* ignore */ } }, [page]);
 
-  if (ready === 'loading') return <div className="create"><h2>Loading…</h2></div>;
-  if (ready !== 'ok') return <div className="create"><h2>Can't start</h2><p className="muted">{ready}</p></div>;
-  const s = game.state, data = game.data;
-  if (!s) return <CreateCharacter data={data} />;
+  if (error) return <div className="create"><h2>Can't start</h2><p className="muted">{error}</p><button className="btn" onClick={() => game.logout()}>Back to login</button></div>;
+  if (game.phase === 'login') return <><Login /><Toast /></>;
+  if (game.phase === 'connecting' || !game.data) return <div className="create"><h2>Connecting to {game.serverUrl}…</h2></div>;
+  if (game.phase === 'create') return <><CreateCharacter data={game.data} /><Toast /></>;
+  const s = game.state, data = game.data, g = game.guild;
+  if (!s || !g) return <div className="create"><h2>Entering the world…</h2></div>;
 
   return (
     <div className="app">
       <Sidebar s={s} data={data} page={page} setPage={setPage} />
       <main className="main"><div className="main-inner">
+        {page === 'guild' && <GuildPage s={s} data={data} g={g} />}
         {page === 'combat' && <CombatPage s={s} data={data} />}
         {(page === 'mining' || page === 'herbalism') && <GatherPage s={s} data={data} skill={page} />}
         {page === 'fishing' && <FishingPage s={s} data={data} />}
@@ -43,8 +47,43 @@ export function App() {
         {page === 'log' && <LogPage s={s} data={data} />}
       </div></main>
       {game.away && <AwayReport sum={game.away} data={data} />}
-      {game.toast && <div className="toast" role="status">{game.toast}</div>}
+      <Toast />
       <TooltipHost />
+    </div>
+  );
+}
+
+const Toast = () => game.toast ? <div className="toast" role="status">{game.toast}</div> : null;
+
+function Login() {
+  const [server, setServer] = useState(game.serverUrl);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const go = async (kind: 'login' | 'register') => {
+    setBusy(true); setErr(null);
+    const e = await game.auth(kind, server, username, password);
+    setBusy(false);
+    if (e) setErr(e);
+  };
+  return (
+    <div className="create" style={{ maxWidth: 460 }}>
+      <h1 style={{ fontSize: 40 }}>World of Idlecraft</h1>
+      <form className="panel" onSubmit={e => { e.preventDefault(); go('login'); }} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <label className="muted" htmlFor="srv">Guild server</label>
+        <input id="srv" className="text" value={server} onChange={e => setServer(e.target.value)} placeholder="http://100.x.y.z:7420" />
+        <label className="muted" htmlFor="usr">Username</label>
+        <input id="usr" className="text" value={username} autoComplete="username" onChange={e => setUsername(e.target.value)} />
+        <label className="muted" htmlFor="pw">Password</label>
+        <input id="pw" className="text" type="password" value={password} autoComplete="current-password" onChange={e => setPassword(e.target.value)} />
+        {err && <div className="c-red" style={{ fontSize: 13 }}>{err}</div>}
+        <div className="btn-row" style={{ marginTop: 6 }}>
+          <button className="btn" type="submit" disabled={busy || !username || !password}>Log in</button>
+          <button className="btn secondary" type="button" disabled={busy || !username || !password} onClick={() => go('register')}>Create account</button>
+        </div>
+        <p className="faint" style={{ fontSize: 12, margin: 0 }}>New accounts join the guild automatically. One character per account.</p>
+      </form>
     </div>
   );
 }
@@ -70,8 +109,14 @@ function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; pag
         {s.char.level < data.maxLevel && <Bar kind="xp" value={s.char.xp} max={toNext} label={`${s.char.xp} / ${toNext} XP`} />}
         <Money copper={s.gold} />
         <ActivityLine s={s} data={data} />
+        <div className={`conn ${game.connected ? '' : 'off'}`}>{game.connected ? `<${game.guild?.name}> · ${game.guild?.roster.filter(r => r.online).length} online` : 'Reconnecting…'}</div>
       </div>
       <nav className="nav">
+        <div className="group">Guild</div>
+        <button className={page === 'guild' ? 'on' : ''} onClick={() => setPage('guild')}>
+          <Icon name="INV_Misc_Note_01" size="sm" /> {game.guild?.name ?? 'Guild'}
+          {game.unreadChat > 0 && page !== 'guild' && <span className="badge">{game.unreadChat}</span>}
+        </button>
         <div className="group">Adventure</div>
         {item('combat', 'Ability_Warrior_OffensiveStance', 'Combat', String(s.char.level))}
         <div className="group">Gathering</div>
@@ -155,7 +200,7 @@ function CreateCharacter({ data }: { data: GameData }) {
         <h3 style={{ marginTop: 16 }}>Name</h3>
         <input className="text" style={{ marginTop: 8 }} maxLength={12} value={name} onChange={e => setName(e.target.value)} placeholder="2-12 letters" />
         <div className="btn-row" style={{ marginTop: 16 }}>
-          <button className="btn" disabled={!valid} onClick={() => game.create(name[0].toUpperCase() + name.slice(1).toLowerCase(), race, cls,
+          <button className="btn" disabled={!valid} onClick={() => game.createCharacter(name, race, cls,
             look ? { sex: look.sex, skin: look.skin, face: look.face, hairStyle: look.hairStyle, hairColor: look.hairColor, facialHair: look.facialHair } : undefined)}>Enter Elwynn Forest</button>
         </div>
       </div>

@@ -173,6 +173,30 @@ h3 { font-size: 18px; }
 .choice.on { border-color: var(--gold); color: var(--gold); background: var(--panel-3); }
 input.text { background: #000; border: 1px solid var(--edge); border-radius: 4px; color: var(--text); padding: 8px 10px; font: inherit; width: 100%; }
 
+/* ---- guild */
+.guild-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 16px; }
+.roster { display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow-y: auto; }
+.member { display: flex; gap: 10px; align-items: flex-start; padding: 6px 8px; border-radius: 5px; background: var(--panel-2); border: 1px solid var(--edge); }
+.member .dot { width: 8px; height: 8px; border-radius: 50%; background: #444; margin-top: 7px; flex: none; }
+.member.on .dot { background: var(--hp); box-shadow: 0 0 6px var(--hp); }
+.member:not(.on) { opacity: 0.7; }
+.member .mname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat { display: flex; flex-direction: column; }
+.chatlog { height: 290px; overflow-y: auto; font-size: 13px; display: flex; flex-direction: column; gap: 3px; background: #0a0806; border: 1px solid var(--edge); border-radius: 5px; padding: 8px; }
+.guild-who { color: #40ff40; }
+.chatlog > div { color: #40ff40; overflow-wrap: anywhere; }
+.feed { display: flex; flex-direction: column; gap: 3px; max-height: 200px; overflow-y: auto; font-size: 13px; }
+.feed .level { color: var(--gold); } .feed .kill { color: #ff9a40; } .feed .rank { color: #6fa8ff; } .feed .join { color: var(--q2); }
+.bank-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.suggest { position: absolute; top: 100%; left: 0; z-index: 5; background: var(--panel-3); border: 1px solid var(--edge-strong); border-radius: 5px; padding: 4px; display: flex; flex-direction: column; min-width: 240px; }
+.suggest button { display: flex; align-items: center; gap: 8px; background: none; border: none; color: var(--text); padding: 4px 6px; cursor: pointer; text-align: left; }
+.suggest button:hover { background: var(--panel-2); }
+.nav .badge { margin-left: 6px; background: #b01c12; color: #fff; border-radius: 8px; font-size: 11px; padding: 0 6px; }
+.conn { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.conn::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--hp); }
+.conn.off::before { background: #c33; }
+@media (max-width: 760px) { .guild-cols, .bank-cols { grid-template-columns: 1fr; } }
+
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: rgba(40, 8, 4, 0.95); border: 1px solid #a33; color: #ffb0a0; padding: 8px 16px; border-radius: 5px; z-index: 60; }
 
 @media (max-width: 760px) {

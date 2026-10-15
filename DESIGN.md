@@ -23,6 +23,10 @@ Living document for the core systems. Sections marked *TBD* get filled in as eac
 | Offline progress cap | **24 hours.** Time beyond the cap is skipped, not simulated. |
 | Gold | **Personal purse** (vendors, trainers) **plus a guild bank** (Phase 3). |
 | Characters per account | **One.** |
+| Guild | One guild, **"Idle Hands"**; every account joins on creation. |
+| Guild bank | **Free deposits and withdrawals for everyone, fully logged.** |
+| Activity feed | **Level milestones (every 10 levels), rare/elite kills, profession rank-ups**, joins. No loot announcements. |
+| Game data to friends | **The server sends it**; friends convert only art, from their own client. |
 
 ## Client data (Phase 0 recon, build 5875 enUS)
 
@@ -118,14 +122,61 @@ Quest-only drops are skipped until quests exist.
   To revisit in Phase 7.
 - Every class currently fights with weapon auto-attacks; spells and talents arrive with Phase 4.
 
+## Server (`apps/server`, Phase 3)
+
+Node + TypeScript, `ws` for WebSockets, SQLite (`better-sqlite3`) in `data/server/`.
+
+**Authority.** The server holds every character's `GameState` and is the only thing that changes it.
+Players send `Command`s (`start`, `stop`, `train`, `buy`, `sell`, `equip`, …); the server shape-checks
+them (`parseCommand`), applies them with the same `applyCommand` the sim exports, and sends back a
+state snapshot. Clients never send state.
+
+**Ticks.** Every second the server advances every character to its *horizon*:
+
+- online → now;
+- offline → `min(now, lastSeen + 24h)`.
+
+So an offline character keeps fighting/gathering for 24 hours after its player was last connected,
+then pauses. When the player returns, the server finishes the window, reports it ("While you were
+away", from the events it simulated), and resumes from now — the time beyond the cap is skipped, not
+simulated. Characters are saved every 10 s and on shutdown.
+
+**Client replay.** The client keeps the latest snapshot and runs the same deterministic sim locally up
+to *server time* (clock offset from each message) to drive the UI and 3D animation. Because the sim is
+deterministic, the replay matches what the server computes; a fresh snapshot arrives after every
+command and every 30 s anyway. Commands are also previewed locally for instant feedback; the server's
+snapshot is the truth. Sim events already shown are not repeated after a resync.
+
+**Accounts.** Username + password (scrypt), opaque 32-byte session tokens. One character per account.
+`?profile=name` in the client URL keeps a separate login per browser tab (for testing).
+
+**Protocol** (`packages/sim/src/protocol.ts`): HTTP `POST /api/register|login|logout`,
+`GET /api/gamedata` (with ETag), `GET /api/health`; WebSocket `/ws` with `auth`, `create`, `cmd`,
+`chat`, `bank`, `request` from clients and `hello`, `state`, `away`, `result`, `guild`, `chat`, `feed`
+from the server.
+
+## Guild economy (Phase 3)
+
+| Piece | Rules |
+|---|---|
+| Membership | Automatic on character creation. Roster shows online status, level, race/class and live activity. |
+| Personal gold | Each character's purse: vendors, trainers. |
+| Guild bank | Items and gold. Anyone may deposit or withdraw; every transaction is logged (who, what, when). |
+| Requests | "Need 20 Copper Ore": up to 10 open per member. Another member fills it by sending items straight to the requester (logged as a "fill"); partial fills allowed; it closes when complete; the requester can cancel. |
+| Chat | Guild chat, 300 characters, 5 messages per 10 s per member; last 60 kept in the snapshot. |
+| Activity feed | Joins; level milestones (10, 20, …); rare/elite/boss kills (once per creature per member per 30 min); profession rank-ups. |
+
+Not yet: crafting orders (one member crafting for another from shared materials) arrive with more
+professions in Phase 4; guild achievements/perks later.
+
 ## Client (`apps/game`)
 
-React panels (Melvor-style) + a three.js diorama. Saves to `localStorage` every 10 s, when the tab is
-hidden and on unload; export/import as a string. On load it runs offline catch-up and shows a
-"While you were away" report. The diorama renders at full rate when focused, ~5 fps when blurred and
-not at all while the tab is hidden; models load lazily and are cached.
+React panels (Melvor-style) + a three.js diorama, talking to the guild server (log in with the
+server's address). The diorama renders at full rate when focused, ~5 fps when blurred and not at all
+while the tab is hidden; models load lazily and are cached. It reconnects automatically if the server
+restarts.
 
-## Idle formulas, group simulation, guild economy — *TBD (Phases 3–6)*
+## Idle formulas, group simulation — *TBD (Phases 4–6)*
 
 ## Idleized content
 
@@ -136,8 +187,9 @@ not at all while the tab is hidden; models load lazily and are cached.
 | Vendors (Elwynn), profession trainers | done |
 | Inventory, equipment (stats, armor, weapons) | done (no class/proficiency checks yet) |
 | Character creation with appearance | done (Alliance races) |
-| Other zones, quests, reputation, all other skills | Phase 4 |
-| Dungeons, raids, guild | Phases 3, 5, 6 |
+| Guild: server, accounts, roster, bank, requests, chat, feed | done (Phase 3) |
+| Other zones, quests, reputation, all other skills, crafting orders | Phase 4 |
+| Dungeons, raids | Phases 5, 6 |
 
 ### Known gaps
 
@@ -146,3 +198,4 @@ not at all while the tab is hidden; models load lazily and are cached.
 - Environment-mapped overlay layers are skipped; global-sequence tracks are held at their first key;
   hermite/bezier keys play linearly.
 - Bags have no slot limit yet.
+- Friends run the client from a copy of the repo (`npm run game`); a one-click launcher is future polish.
