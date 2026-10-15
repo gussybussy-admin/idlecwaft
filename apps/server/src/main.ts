@@ -28,13 +28,15 @@ const gameDataJson = fs.readFileSync(dataFile, 'utf8');
 const data = JSON.parse(gameDataJson) as GameData;
 const db = openDb(dbFile, guildName);
 const world = new World(db, data);
-const server = createServer({ db, world, gameDataJson });
+const launcherFile = path.join(root, 'release', 'IdlecraftLauncher.exe');
+const server = createServer({ db, world, gameDataJson, launcherFile });
 
 const tick = setInterval(() => world.tick(), 1000);
 const save = setInterval(() => world.save(), 10_000);
 
 server.httpServer.listen(port, host, () => {
   console.log(`World of Idlecraft server: guild "${guildName}", listening on http://${host}:${port}`);
+  if (fs.existsSync(launcherFile)) console.log(`  offering launcher updates from ${path.relative(root, launcherFile)}`);
   console.log(`  game data ${path.relative(root, dataFile)} (${data.zones.map(z => z.name).join(', ')}), db ${path.relative(root, dbFile)}`);
 });
 

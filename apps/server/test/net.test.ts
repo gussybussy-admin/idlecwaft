@@ -1,6 +1,10 @@
 // End-to-end: real HTTP + WebSocket server on a random port, two players.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AddressInfo } from 'node:net';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import WebSocket from 'ws';
 import type { ClientMessage, ServerMessage } from '@idle/sim';
 import { fixture } from '../../../packages/sim/test/fixture.js';
@@ -10,11 +14,14 @@ import { createServer } from '../src/net.js';
 
 const data = fixture();
 let base = '', server: ReturnType<typeof createServer>;
+const launcherFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'idle-launcher-')), 'IdlecraftLauncher.exe');
+const launcherBytes = crypto.randomBytes(4096);
 
 beforeAll(async () => {
   const db = openDb(':memory:', 'Idle Hands');
   const world = new World(db, data);
-  server = createServer({ db, world, gameDataJson: JSON.stringify(data) });
+  fs.writeFileSync(launcherFile, launcherBytes);
+  server = createServer({ db, world, gameDataJson: JSON.stringify(data), launcherFile });
   await new Promise<void>(r => server.httpServer.listen(0, '127.0.0.1', r));
   base = `127.0.0.1:${(server.httpServer.address() as AddressInfo).port}`;
 });
@@ -96,6 +103,18 @@ describe('game server over the network', () => {
     expect(g.guild.feed.map(f => f.text)).toEqual(expect.arrayContaining(['Alice joined the guild.', 'Bobby joined the guild.']));
 
     ca.close(); cb.close();
+  });
+
+  it('offers the launcher build for self-updates, with its hash', async () => {
+    const info = await fetch(`http://${base}/api/launcher`).then(r => r.json());
+    expect(info).toEqual({ ok: true, size: 4096, sha256: crypto.createHash('sha256').update(launcherBytes).digest('hex') });
+    const body = Buffer.from(await (await fetch(`http://${base}/api/launcher/download`)).arrayBuffer());
+    expect(body.equals(launcherBytes)).toBe(true);
+    // A rebuilt launcher is picked up without restarting the server.
+    const next = crypto.randomBytes(2048);
+    fs.writeFileSync(launcherFile, next);
+    fs.utimesSync(launcherFile, new Date(), new Date(Date.now() + 5000));
+    expect((await fetch(`http://${base}/api/launcher`).then(r => r.json())).sha256).toBe(crypto.createHash('sha256').update(next).digest('hex'));
   });
 
   it('rejects bad tokens', async () => {

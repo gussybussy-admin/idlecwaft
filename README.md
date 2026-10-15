@@ -38,8 +38,13 @@ data/vmangos/db/sqlite-dump/mangos.sqlite
 npm run assets -- import
 ```
 
-This builds Elwynn Forest's game data, icons, UI art, fonts, scenery, character and creature models
-into `cache/` (about 95 MB, a couple of minutes).
+This builds the game data for both continents (`cache/data/game.json`: zones, creatures, items,
+recipes, quests, class spells, talents; about 12 MB, a couple of minutes), then the eager art: icons,
+UI art, fonts and character models. Creature models and item icons are converted the first time
+they're needed. `npm run assets -- import 12 1519` limits the data to the listed zone ids.
+
+After pulling a new version, re-run `import` and restart the server so everyone gets the new data
+(the server sends it to players and old saves are upgraded on load).
 
 ## Host the guild server
 
@@ -89,13 +94,19 @@ A friend puts it in its own folder and double-clicks it:
 
 Windows SmartScreen will say "unknown publisher" (the exe isn't code-signed): **More info → Run anyway**.
 
+**Updates are automatic.** The guild server offers the launcher in `release/` to everyone who connects:
+on start, a launcher whose build differs downloads the new one from your server, checks its SHA-256,
+swaps itself and restarts in the same window. So after you pull a new version, run
+`npm run build:launcher` (if the exe in the pull isn't already current) and restart the server, and
+friends get it the next time they open the launcher. `--no-update` skips the check.
+
 ### From source (any OS)
 
 Friends with Node 20+ and a copy of this repo can instead:
 
 1. `npm install`
 2. Copy `idle.config.example.json` to `idle.config.json` and set `clientPath` to their client.
-3. Convert the art (about 95 MB, under a minute):
+3. Convert the art (under a minute; creature models follow on demand while playing):
 
    ```bash
    npm run assets -- art --server http://100.x.y.z:7420

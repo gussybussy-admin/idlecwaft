@@ -8,13 +8,13 @@ Living document for the core systems. Sections marked *TBD* get filled in as eac
   `cache/` (gitignored). The game server never serves game assets; it only sends game state.
 - **Gameplay data source: VMaNGOS** world DB (GPL-2.0, `db_latest` SQLite release), downloaded to
   `data/vmangos/` (gitignored) and imported locally. What decides *what exists* (skills, recipe skill
-  thresholds, zones, icons, models) comes from the client DBCs; what the client never had (stats,
-  spawns, loot, vendors, trainers) comes from VMaNGOS, pinned to patch 1.12. Procedural values only
-  fill gaps (hybrid, option c).
+  thresholds, zones, icons, models, talents, factions) comes from the client DBCs; what the client never
+  had (stats, spawns, loot, vendors, trainers, quests) comes from VMaNGOS, pinned to patch 1.12.
+  Procedural values only fill gaps (hybrid, option c).
 - **Multiplayer over a private VPN** (e.g. Tailscale). Every friend owns a 1.12.1 client and runs
   the converter locally.
 - **Server-authoritative (from Phase 3).** The shared simulation is deterministic and seeded, so the
-  server resolves outcomes and clients replay them. In Phase 2 the browser runs it locally.
+  server resolves outcomes and clients replay them.
 
 ### Game-feel decisions
 
@@ -23,10 +23,15 @@ Living document for the core systems. Sections marked *TBD* get filled in as eac
 | Offline progress cap | **24 hours.** Time beyond the cap is skipped, not simulated. |
 | Gold | **Personal purse** (vendors, trainers) **plus a guild bank** (Phase 3). |
 | Characters per account | **One.** |
-| Guild | One guild, **"Idle Hands"**; every account joins on creation. |
+| Guild | One guild, **"Idle Hands"**; every account joins on creation. **Alliance and Horde share it** (Phase 4). |
 | Guild bank | **Free deposits and withdrawals for everyone, fully logged.** |
 | Activity feed | **Level milestones (every 10 levels), rare/elite kills, profession rank-ups**, joins. No loot announcements. |
 | Game data to friends | **The server sends it**; friends convert only art, from their own client. |
+| Classes | **Real spells, cast by an automatic rotation**; real talent effects (Phase 4). |
+| Travel | **Takes minutes**: running, flight paths, boats/zeppelins, riding (Phase 4). |
+| Quest objectives | Kills and drops play out in fights; **everything else becomes a timed task** (Phase 4). |
+| Healing | **Food heals; nothing else does between fights.** Natural regeneration is 1 HP per minute, so fishing and cooking are what keep a fighter going (Phase 4). |
+| Professions | **Two primary professions** at a time (vanilla rule), unlearnable; secondary skills are free (Phase 4c). |
 
 ## Client data (Phase 0 recon, build 5875 enUS)
 
@@ -64,20 +69,22 @@ robes, tabard).
 **Zone lookup:** spawn coordinates → ADT tile/chunk → the chunk's area id → AreaTable parent chain
 → zone. Same data the client uses to name the zone you stand in.
 
-`npm run assets -- import` builds `cache/data/game.json`, icons, UI art, fonts, Elwynn scenery,
-character and creature models. Whole Elwynn cache: ~95 MB.
+`npm run assets -- import` builds `cache/data/game.json` (~12 MB: 45 zones, ~9,300 items, 916 recipes,
+2,613 quests, class spells and talents). `npm run assets -- art` converts UI art, icons and character
+models eagerly; creature models and item icons are converted on first request (lazily) by the launcher
+or the dev server.
 
 ## Simulation (`packages/sim`)
 
-Event-driven: `advance(state, data, t)` resolves discrete events (search ends, swings, deaths, casts
-completing) in time order until `t`, drawing every random number from an sfc32 RNG whose state lives
+Event-driven: `advance(state, data, t)` resolves discrete events (search ends, swings, casts, ticks,
+deaths) in time order until `t`, drawing every random number from an sfc32 RNG whose state lives
 in the save. **Same state + same target time = same result**, regardless of how the time is chunked
-(tested: 1 big step ≡ thousands of small ones; offline catch-up ≡ online play).
+(tested: 1 big step ≡ thousands of small ones; offline catch-up ≡ online play; casters included).
 
-Health regenerates in whole points on 2-second ticks aligned to absolute time, which is what makes
-chunking irrelevant.
+Health, mana and energy change in whole points on ticks aligned to absolute time (food and power every
+2 s, natural health regeneration every 60 s), which is what makes chunking irrelevant.
 
-### Combat (idle auto-attack)
+### Combat
 
 | Piece | Formula |
 |---|---|
@@ -85,51 +92,107 @@ chunking irrelevant.
 | Gray level | L≤5: 0; ≤39: L−5−⌊L/10⌋; ≤59: L−1−⌊L/5⌋; else L−9 |
 | XP to level | `player_xp_for_level` (VMaNGOS) |
 | Player HP | class base HP + stamina (first 20 → 1 HP each, then 10 HP each) |
+| Mana | class base mana + intellect (first 20 → 1 each, then 15 each); regen per 2 s tick from spirit (per class), only outside the five-second rule |
+| Rage / energy | rage from damage dealt and taken (vanilla formula), fades out of combat; energy 20 per 2 s, cap 100 |
 | Attack power | per class, vanilla formulas (e.g. warrior/paladin `2·Str + 3·L − 20`) |
 | Swing damage | weapon min–max (unarmed 1–2) + AP/14 × speed |
-| Miss | `5% + 0.1%·(def − skill)` up to 10 points apart, then `7% + 0.4%` per point; skill/defense = 5 × level |
-| Dodge | mob: 5% + 0.1% per level above you; player: Agi/20 % |
-| Crit | player 5% + Agi/20 %, mob 5%; crits double |
+| Miss | weapon skill vs defense: `5% + 0.1%·(def − skill)` up to 10 points apart, then `7% + 0.4%` per point |
+| Weapon skills / Defense | rise with use up to 5 × level (vanilla chance curve); class proficiencies from SkillRaceClassInfo |
+| Dodge | mob: 5% + 0.1% per level above you; player: Agi/20 % (+ defense) |
+| Crit | melee 5% + Agi/20 %, spell 5% + Int/60 %, mob 5%; crits double (spells ×1.5) |
 | Armor | reduction `A / (A + 400 + 85·attackerLevel)`, max 75% |
 | Mob stats | VMaNGOS `creature_classlevelstats` × template multipliers; damage is per hit at a 2.0 s swing, scaled by attack time |
-| Out-of-combat regen | `Spi/4 + 3` HP per second (approximation of spirit regen) |
-| Search | 2.5–4.5 s between mobs |
-| Resting | below 60% HP after a kill; eats the smallest food that tops you up when below 50% (toggle in settings) |
-| Death | 30 s corpse run, resurrect at 50% HP |
+| Healing between fights | **food only** (eat to full); without food you wait (1 HP/min) until the rest threshold |
+| Potions | healing potions drunk automatically below 35% HP in a fight, 2 min shared cooldown |
+| Death | 30 s corpse run, resurrect at 10% HP |
 
-### Professions
+### Class spells and the rotation (Phase 4b)
+
+Every class spell rank comes from trainer data plus the client's spell table, normalized into a small
+effect set: direct damage/heal, weapon strikes (flat or %), DoT/HoT, channels, absorb shields,
+self buffs (stats, AP, armor, haste), seals, thorns, combo points, energize, conjure food/water.
+Spells the idle fight can't use (pets, totems, crowd control, ranged-slot shots) are left out.
+
+The rotation runs on GCD/cast/cooldown timers: it heals when hurt, keeps buffs and seals up (they're
+passive while known), and otherwise casts the affordable spell with the best expected damage per
+second of cast, spending combo points at 5 (or when the mob is nearly dead). Proc abilities
+(Overpower, Revenge, Riposte, Execute) are used when their condition holds. Melee classes keep
+swinging; next-swing abilities (Heroic Strike) replace a swing.
+
+Spells are trained at a class trainer (zones from VMaNGOS trainer spawns) at their vanilla costs.
+
+### Talents (Phase 4b)
+
+Trees from Talent.dbc/TalentTab.dbc: 5 points per row, prerequisites, one point per level from 10.
+Each rank spell's auras become effects: flat/% stats, health/mana %, melee/spell crit and hit, dodge,
+armor, attack power, school damage %, and **spell modifiers** (damage, crit, cast time, cost,
+cooldown) that select spells the way the game does — by spell family and family-flag mask. 146 of
+the 432 talents change idle combat; the rest say so in their tooltip. Respec costs 1g, then 5g more
+each time up to 50g.
+
+### Travel (Phase 4a)
+
+Zone-to-zone travel takes real minutes: running at 7 yd/s between zone centres (or neighbouring flight
+masters), boats/zeppelins at 3 minutes per crossing, flight paths at 32 yd/s along the taxi network
+(Dijkstra over discovered nodes, at their real costs). Riding: +60% at level 40 (90g), +100% at 60 (900g).
+
+### Professions (Phase 4c)
 
 Skills are WoW skill points (1–300), not XP. Ranks (Apprentice 75 → Artisan 300) are bought from
-trainers with the costs and level requirements from VMaNGOS trainer data, and the next rank needs
-skill ≥ cap − 25.
+trainers with the costs and level requirements from VMaNGOS trainer data; the next rank needs
+skill ≥ cap − 25. Two primary professions at a time; unlearning forgets the skill and its recipes.
 
 | Skill | Action | Skill-up |
 |---|---|---|
 | Mining / Herbalism | 5 s per node (walk + gather), one loot roll | orange 100% · yellow 75% · green 25% · grey 0% (node colours: req, +25, +50, +100) |
+| Skinning | automatic on every beast you kill (knife needed); needs `L<10: 1, L<20: (L−10)·10, else 5·L` | same colour chances |
 | Fishing | 5–18 s bobber; catch if `skill − zoneSkill + 5 > roll` | 100% below 75, then `2500/(skill−50)` % per catch |
-| Cooking | recipe cast time + 0.5 s; consumes reagents | same colour chances; thresholds from SkillLineAbility.dbc |
+| Crafting (all) | recipe cast time + 0.5 s; consumes reagents; repeat until out or a count | colour chances, thresholds from SkillLineAbility.dbc |
+| Disenchanting | instant; uncommon+ gear → `disenchant_loot_template` | needs `25·⌈(itemLevel−20)/5⌉` |
 
-Mining needs a Mining Pick, fishing a Fishing Pole (both sold in Elwynn). Starter recipes come with the
-skill; others are bought from trainers or learned from recipe items.
+Recipes: every SkillLineAbility create-item or enchant spell with reagents, accepted only if the
+world can supply the reagents. Intermediates count (bars, bolts, leather) because recipes are
+resolved to a fixed point. Tools (Blacksmith Hammer, Arclight Spanner, Runed Rods) come from the
+spell's totem fields. Enchantments go on one of your equipped items (the first that fits, or one you
+pick) and add their stats; they fall off when the item is replaced. Bandages heal between fights like
+food.
 
 Loot uses MaNGOS semantics: ungrouped entries roll independently; a group yields at most one entry
 (explicit chances first, then an even split among 0-chance entries); references resolve recursively.
-Quest-only drops are skipped until quests exist.
+Quest-only drops roll only while a quest in your log still needs them.
+
+### Quests and reputation (Phase 4d)
+
+2,613 quests from `quest_template`, picked up where the giver stands and handed in where the ender
+stands (their spawn zones; you travel there). Requirements: level, race, class, side, profession
+skill, previous quest, exclusive groups. Rewards: XP with the vanilla reduction for out-levelled
+quests (−20% per level beyond +5, floor 10%), money (money instead of XP at 60), items with a choice,
+reputation. Log of 20.
+
+Objectives: **kills** count in the normal fight loop; **items** drop from creatures (quest-only drops
+included); everything else — talk to, deliver, use an object, cast on a target, enemies or quest items
+the idle world doesn't spawn — becomes a **timed task** (30 s base plus per-objective time, capped at
+10 minutes) that you run as an action. Tasks only ever hand out quest items, so they can't be used to
+skip earning real items. Dungeon, raid, PvP and world-event quests are left for later phases.
+
+Reputation: factions and racial starting standing from Faction.dbc; gained from quests and kills
+(`creature_onkill_reputation`, which stops at its max rank, team-dependent where marked). Some vendor
+items need a standing.
 
 ### Known balance notes
 
-- Kill pace is quick (~12 s per kill at even level including search and rest) next to vanilla.
-  To revisit in Phase 7.
-- Every class currently fights with weapon auto-attacks; spells and talents arrive with Phase 4.
+- Kill pace is quick (~220–350 kills/hour at level 1–5 with spells) next to vanilla. To revisit in
+  Phase 7, together with quest XP vs grinding.
 
 ## Server (`apps/server`, Phase 3)
 
 Node + TypeScript, `ws` for WebSockets, SQLite (`better-sqlite3`) in `data/server/`.
 
 **Authority.** The server holds every character's `GameState` and is the only thing that changes it.
-Players send `Command`s (`start`, `stop`, `train`, `buy`, `sell`, `equip`, …); the server shape-checks
-them (`parseCommand`), applies them with the same `applyCommand` the sim exports, and sends back a
-state snapshot. Clients never send state.
+Players send `Command`s (`start`, `stop`, `train`, `buy`, `equip`, `trainSpells`, `learnTalent`,
+`acceptQuest`, `turnInQuest`, …); the server shape-checks them (`parseCommand`), applies them with the
+same `applyCommand` the sim exports, and sends back a state snapshot. Clients never send state.
+Older saves are brought up to date on load (`migrateState`).
 
 **Ticks.** Every second the server advances every character to its *horizon*:
 
@@ -151,48 +214,52 @@ snapshot is the truth. Sim events already shown are not repeated after a resync.
 `?profile=name` in the client URL keeps a separate login per browser tab (for testing).
 
 **Protocol** (`packages/sim/src/protocol.ts`): HTTP `POST /api/register|login|logout`,
-`GET /api/gamedata` (with ETag), `GET /api/health`; WebSocket `/ws` with `auth`, `create`, `cmd`,
-`chat`, `bank`, `request` from clients and `hello`, `state`, `away`, `result`, `guild`, `chat`, `feed`
-from the server.
+`GET /api/gamedata` (gzip, with ETag), `GET /api/health`; WebSocket `/ws` with `auth`, `create`, `cmd`,
+`chat`, `bank`, `request`, `order` from clients and `hello`, `state`, `away`, `result`, `guild`, `chat`,
+`feed` from the server.
 
-## Guild economy (Phase 3)
+## Guild economy
 
 | Piece | Rules |
 |---|---|
-| Membership | Automatic on character creation. Roster shows online status, level, race/class and live activity. |
-| Personal gold | Each character's purse: vendors, trainers. |
+| Membership | Automatic on character creation (either faction). Roster shows online status, level, race/class and live activity. |
+| Personal gold | Each character's purse: vendors, trainers, respecs, riding. |
 | Guild bank | Items and gold. Anyone may deposit or withdraw; every transaction is logged (who, what, when). |
 | Requests | "Need 20 Copper Ore": up to 10 open per member. Another member fills it by sending items straight to the requester (logged as a "fill"); partial fills allowed; it closes when complete; the requester can cancel. |
+| Crafting orders (Phase 4c) | Order N crafts of any item recipe; optionally hand over the reagents and a tip, which the guild holds. A member who knows the recipe claims it (receiving the reagents), crafts, and delivers: the items go to the buyer, the tip to the crafter, and it's logged. Unclaimed orders can be cancelled (escrow returned); a crafter can give an order up by returning the reagents. |
 | Chat | Guild chat, 300 characters, 5 messages per 10 s per member; last 60 kept in the snapshot. |
 | Activity feed | Joins; level milestones (10, 20, …); rare/elite/boss kills (once per creature per member per 30 min); profession rank-ups. |
 
-Not yet: crafting orders (one member crafting for another from shared materials) arrive with more
-professions in Phase 4; guild achievements/perks later.
+Not yet: guild achievements/perks.
 
 ## Client (`apps/game`)
 
 React panels (Melvor-style) + a three.js diorama, talking to the guild server (log in with the
-server's address). The diorama renders at full rate when focused, ~5 fps when blurred and not at all
-while the tab is hidden; models load lazily and are cached. It reconnects automatically if the server
+server's address). Pages: combat, quests, every profession, spellbook/trainer, talents, equipment,
+bags, reputation, travel, trainers & vendors, guild, log. The diorama renders at full rate when
+focused, ~5 fps when blurred and not at all while the tab is hidden; models load lazily and are cached.
+Floating combat text names the spell and shows heals. It reconnects automatically if the server
 restarts.
 
-## Idle formulas, group simulation — *TBD (Phases 4–6)*
+## Group simulation — *TBD (Phases 5–6)*
 
 ## Idleized content
 
 | Content | Status |
 |---|---|
-| Elwynn Forest combat (46 creature types incl. rares and Hogger) | done |
-| Mining, Herbalism (Elwynn nodes), Fishing (Elwynn pools), Cooking (6 recipes) | done |
-| Vendors (Elwynn), profession trainers | done |
-| Inventory, equipment (stats, armor, weapons) | done (no class/proficiency checks yet) |
-| Character creation with appearance | done (Alliance races) |
-| Guild: server, accounts, roster, bank, requests, chat, feed | done (Phase 3) |
-| Other zones, quests, reputation, all other skills, crafting orders | Phase 4 |
-| Dungeons, raids | Phases 5, 6 |
+| Both continents: 45 zones, creatures with real stats/loot, vendors, flight paths, boats | done (Phase 4a) |
+| Both factions, all races and classes | done (Phase 4a) |
+| Class spells, automatic rotation, talents, weapon skills, defense | done (Phase 4b) |
+| All professions, recipes, enchanting, disenchanting, skinning, potions, bandages | done (Phase 4c) |
+| Guild: server, accounts, roster, bank, requests, crafting orders, chat, feed | done (Phases 3, 4c) |
+| Quests (non-instance), reputation | done (Phase 4d) |
+| Dungeons, raids (and their quests) | Phases 5, 6 |
 
 ### Known gaps
 
+- Lockpicking, pets (hunter/warlock), totems, poisons/imbues and crowd control aren't idleized yet;
+  hunters fight in melee until ranged weapons arrive.
+- Profession specializations (Elemental/Dragonscale, Gnomish/Goblin, ...) and their reputations.
 - Helmets, shoulders and weapons aren't attached to models yet; player gear doesn't change the
   player's look yet (the texture compositor is ready for it).
 - Environment-mapped overlay layers are skipped; global-sequence tracks are held at their first key;
@@ -202,8 +269,9 @@ restarts.
 
 ## Launcher (`apps/launcher`)
 
-A Node single-executable app (`npm run build:launcher` → `dist/launcher/IdlecraftLauncher.exe`):
+A Node single-executable app (`npm run build:launcher` → `release/IdlecraftLauncher.exe`):
 first-run setup (WoW folder, server address), art conversion from the player's own client into
-`idlecraft-cache/` keyed by the server's data version, and a localhost web server for the embedded
-client build + that cache. The build script refuses to embed anything but HTML/JS/CSS, and the game's
-Vite config gives production builds no public dir, so converted art can't end up in a distributable.
+`idlecraft-cache/` keyed by the server's data version (creature models and item icons converted on
+first use), and a localhost web server for the embedded client build + that cache. The build script
+refuses to embed anything but HTML/JS/CSS, and the game's Vite config gives production builds no public
+dir, so converted art can't end up in a distributable.

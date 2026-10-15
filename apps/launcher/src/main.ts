@@ -3,7 +3,9 @@
 //  2. Converts the art the server's world needs, from the player's OWN client, into a local cache —
 //     only when the server's world changed since last time.
 //  3. Serves the game client + that cache on http://localhost and opens the browser.
+//  Before that it updates itself when the guild server offers a newer launcher build.
 // Nothing Blizzard-made is bundled in the launcher or downloaded; the cache is built on this machine.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -143,6 +145,46 @@ function serve(art: LazyArt): Promise<number> {
   });
 }
 
+/**
+ * Keeps the launcher in step with the guild server: if the server offers a different build than this
+ * exe, download it, check its SHA-256, swap it in (Windows lets a running exe be renamed, not
+ * overwritten) and run the new one in this same window. Returns true if the new build took over.
+ */
+async function selfUpdate(server: string): Promise<boolean> {
+  if (!packaged || process.argv.includes('--no-update')) return false;
+  const exe = process.execPath, old = `${exe}.old`, part = `${exe}.download`;
+  try { fs.rmSync(old, { force: true }); } catch { /* still locked by the previous run: next time */ }
+  let info: { sha256: string; size: number };
+  try {
+    const r = await fetch(`${server}/api/launcher`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return false; // the server has no launcher build to offer
+    info = await r.json() as { sha256: string; size: number };
+  } catch { return false; }
+  const mine = crypto.createHash('sha256').update(fs.readFileSync(exe)).digest('hex');
+  if (mine === info.sha256) return false;
+  say(`A new launcher version is available (${(info.size / 1024 / 1024).toFixed(0)} MB). Updating…`);
+  try {
+    const r = await fetch(`${server}/api/launcher/download`, { signal: AbortSignal.timeout(10 * 60_000) });
+    if (!r.ok || !r.body) throw new Error(`download failed (${r.status})`);
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (crypto.createHash('sha256').update(buf).digest('hex') !== info.sha256) throw new Error('the download was damaged');
+    fs.writeFileSync(part, buf);
+    fs.renameSync(exe, old);
+    fs.renameSync(part, exe);
+  } catch (e) {
+    try { fs.rmSync(part, { force: true }); } catch { /* ignore */ }
+    if (!fs.existsSync(exe) && fs.existsSync(old)) fs.renameSync(old, exe);
+    say(`Couldn't update (${(e as Error).message}); starting this version.`);
+    return false;
+  }
+  say('Updated. Restarting…');
+  say();
+  rl.close();
+  const child = spawn(exe, process.argv.slice(2), { stdio: 'inherit' });
+  child.on('exit', code => process.exit(code ?? 0));
+  return true;
+}
+
 function openBrowser(url: string): void {
   const cmd = process.platform === 'win32' ? ['cmd', ['/c', 'start', '""', url]] as const
     : process.platform === 'darwin' ? ['open', [url]] as const : ['xdg-open', [url]] as const;
@@ -165,6 +207,7 @@ async function main(): Promise<void> {
     h = await health(cfg.server);
   }
   say(`Guild server: ${cfg.server}`);
+  if (await selfUpdate(cfg.server)) return; // the new build carries on in this window
   await ensureArt(cfg, h.dataVersion);
 
   const port = await serve(new LazyArt(new Client(cfg.clientPath), cacheDir));

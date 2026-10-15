@@ -1,4 +1,5 @@
 // HTTP (register/login/game data) and WebSocket (game session) front-end for the World.
+import fs from 'node:fs';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
@@ -12,9 +13,13 @@ import type { World } from './world.js';
 const RESYNC_MS = 30_000;
 const MAX_BODY = 16 * 1024;
 
-export interface NetOptions { db: DB; world: World; gameDataJson: string; clock?: () => number }
+export interface NetOptions {
+  db: DB; world: World; gameDataJson: string; clock?: () => number;
+  /** The current launcher build, offered to launchers so they update themselves (optional). */
+  launcherFile?: string;
+}
 
-export function createServer({ db, world, gameDataJson, clock = Date.now }: NetOptions) {
+export function createServer({ db, world, gameDataJson, clock = Date.now, launcherFile }: NetOptions) {
   const dataVersion = crypto.createHash('sha1').update(gameDataJson).digest('hex').slice(0, 16);
   const gameDataGzip = zlib.gzipSync(gameDataJson, { level: 9 }); // ~9 MB of JSON compresses ~10x
   const sockets = new Map<WebSocket, { accountId: number; username: string } | null>();
@@ -44,6 +49,18 @@ export function createServer({ db, world, gameDataJson, clock = Date.now }: NetO
     feed: item => { for (const [ws, a] of sockets) if (a) send(ws, { t: 'feed', item }); },
   });
 
+  // The launcher on offer: hashed once per change of the file (the host rebuilds it after updates).
+  let launcherInfo: { mtimeMs: number; size: number; sha256: string } | null = null;
+  const launcher = () => {
+    if (!launcherFile) return null;
+    let st: fs.Stats;
+    try { st = fs.statSync(launcherFile); } catch { return null; }
+    if (launcherInfo?.mtimeMs !== st.mtimeMs || launcherInfo.size !== st.size) {
+      launcherInfo = { mtimeMs: st.mtimeMs, size: st.size, sha256: crypto.createHash('sha256').update(fs.readFileSync(launcherFile)).digest('hex') };
+    }
+    return launcherInfo;
+  };
+
   // ---------------------------------------------------------------- HTTP
   const httpServer = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -58,6 +75,17 @@ export function createServer({ db, world, gameDataJson, clock = Date.now }: NetO
       const gzip = /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''));
       res.writeHead(200, { 'content-type': 'application/json', etag: dataVersion, ...(gzip ? { 'content-encoding': 'gzip' } : {}) });
       res.end(gzip ? gameDataGzip : gameDataJson);
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/launcher') {
+      const l = launcher();
+      return l ? json(200, { ok: true, sha256: l.sha256, size: l.size }) : json(404, { ok: false, error: 'No launcher build on this server.' });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/launcher/download') {
+      const l = launcher();
+      if (!l) return json(404, { ok: false, error: 'No launcher build on this server.' });
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': l.size, 'x-sha256': l.sha256 });
+      fs.createReadStream(launcherFile!).pipe(res);
       return;
     }
     if (req.method === 'POST' && ['/api/register', '/api/login', '/api/logout'].includes(url.pathname)) {
