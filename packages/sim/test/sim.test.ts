@@ -445,6 +445,15 @@ describe('professions and commands', () => {
     expect(s.gold).toBe(0);
     for (const p of ['cooking', 'fishing', 'firstaid'] as const) expect(train(s, data, p).ok).toBe(true);
     expect(train(s, data, 'mining')).toEqual({ ok: false, error: 'Costs 10c.' });
+    expect(s.inventory[11]).toBe(1); // a Fishing Pole from the trainer
+    expect(startAction(s, data, { kind: 'fish' }).ok).toBe(true);
+    // Learned Fishing before poles were handed out: the first cast brings one, once.
+    const old = fresh();
+    old.skills.fishing = { level: 1, max: 75 };
+    expect(startAction(old, data, { kind: 'fish' }).ok).toBe(true);
+    expect(old.inventory[11]).toBe(1);
+    delete old.inventory[11];
+    expect(startAction(old, data, { kind: 'fish' }).ok).toBe(false);
   });
 
   it('only two primary professions at a time; unlearning frees a slot', () => {

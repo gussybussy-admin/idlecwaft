@@ -70,6 +70,8 @@ export interface GameState {
   equipment: Partial<Record<Slot, number>>;
   /** Enchantments (SpellItemEnchantment ids) on equipped items; they fall off when the item is replaced. */
   enchants: Partial<Record<Slot, number>>;
+  /** Whether the fishing trainer has handed out this character's free pole. */
+  starterPole?: boolean;
   /** Health potions share a 2 minute cooldown. */
   potionReadyAt?: number;
   zone: number;

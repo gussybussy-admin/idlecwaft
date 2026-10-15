@@ -608,7 +608,7 @@ export function canGather(s: GameState, data: GameData, nodeId: number): string 
 
 export function canFish(s: GameState, data: GameData): string | null {
   if (!s.skills.fishing.max) return 'You need to train Fishing first.';
-  if (!hasTool(s, data, 'fishing-pole')) return 'Requires a Fishing Pole.';
+  if (!hasTool(s, data, 'fishing-pole') && s.starterPole) return 'Requires a Fishing Pole.'; // (the first one is free)
   if (!data.zones.find(z => z.id === s.zone)?.fishing) return 'There is nowhere to fish here.';
   return null;
 }
@@ -706,6 +706,7 @@ const ok: CommandResult = { ok: true };
 const fail = (error: string): CommandResult => ({ ok: false, error });
 
 export function startAction(s: GameState, data: GameData, action: Action): CommandResult {
+  if (action.kind === 'fish' && s.skills.fishing.max) giveStarterPole(s, data);
   const err = action.kind === 'fight' ? canFight(s, data, action.creature)
     : action.kind === 'gather' ? canGather(s, data, action.node)
     : action.kind === 'fish' ? canFish(s, data)
@@ -736,6 +737,19 @@ export function rankTerms(skill: Profession, rank: SkillRank, currentMax: number
   return !currentMax && !PRIMARY_PROFESSIONS.includes(skill) ? { reqLevel: 1, cost: 0 } : { reqLevel: rank.reqLevel, cost: rank.cost };
 }
 
+/**
+ * The fishing trainer hands every new angler a pole (once per character), so food is reachable from
+ * level 1. Characters who learned Fishing before this existed get theirs the first time they fish.
+ */
+function giveStarterPole(s: GameState, data: GameData): void {
+  if (s.starterPole || hasTool(s, data, 'fishing-pole')) return;
+  const pole = Object.values(data.items).filter(it => it.tool === 'fishing-pole').sort((a, b) => a.buyPrice - b.buyPrice)[0];
+  if (!pole) return;
+  addItem(s, pole.id, 1);
+  s.starterPole = true;
+  log(s, 'loot', `The fishing trainer gives you a ${pole.name}.`);
+}
+
 export function train(s: GameState, data: GameData, skill: Profession): CommandResult {
   const ranks = data.skillRanks[skill];
   const sk = s.skills[skill];
@@ -749,8 +763,10 @@ export function train(s: GameState, data: GameData, skill: Profession): CommandR
   if (s.char.level < reqLevel) return fail(`Requires level ${reqLevel}.`);
   if (s.gold < cost) return fail(`Costs ${formatMoney(cost)}.`);
   s.gold -= cost;
+  const firstRank = !sk.max;
   sk.max = next.max;
   if (!sk.level) sk.level = 1;
+  if (skill === 'fishing' && firstRank) giveStarterPole(s, data);
   for (const r of Object.values(data.recipes)) {
     if (r.skill === skill && 'trainer' in r.source && r.source.trainer === 0 && r.orange <= sk.level && !s.recipes.includes(r.spellId)) s.recipes.push(r.spellId);
   }
