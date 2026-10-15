@@ -3,7 +3,7 @@ import {
   advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, planTravel, playerStats,
   rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, trainSpells, knownSpells,
   learnTalent, pointsSpent, modded, activeTalentEffects, resetTalents, resetCost,
-  disenchant, unlearnProfession, migrateState, applyCommand, parseCommand,
+  disenchant, unlearnProfession, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
   type GameState, type SimEvent,
 } from '../src/index.js';
 import { fixture } from './fixture.js';
@@ -85,6 +85,7 @@ describe('travel, flight paths and factions', () => {
     expect(startAction(ally, data, { kind: 'fight', creature: 102 })).toEqual({ ok: false, error: 'You cannot attack that.' });
     expect(startAction(horde, data, { kind: 'fight', creature: 102 }).ok).toBe(true);
     ally.gold = horde.gold = 1000;
+    ally.rep[72] = 3000; // the smith wants Friendly standing
     expect(buy(ally, data, 12).ok).toBe(true);
     expect(buy(horde, data, 12).ok).toBe(false);
   });
@@ -342,6 +343,73 @@ describe('combat', () => {
     advance(s, data, T0 + 30 * 60_000, e => events.push(e));
     expect(events.some(e => e.type === 'eat')).toBe(true);
     expect(s.inventory[5] ?? 0).toBeLessThan(5);
+  });
+});
+
+describe('quests and reputation', () => {
+  it('kill quest: accept, credit kills, hand in for a chosen reward, unlock the follow-up', () => {
+    const s = fresh();
+    s.inventory[5] = 20;
+    expect(availableQuests(s, data).map(q => q.id)).toEqual([400, 402]); // 401 needs 400 first
+    expect(acceptQuest(s, data, 400).ok).toBe(true);
+    startAction(s, data, { kind: 'fight', creature: 100 });
+    advance(s, data, T0 + 20 * 60_000);
+    expect(questComplete(s, data, 400)).toBe(true);
+    stopAction(s);
+    expect(completeQuest(s, data, 400)).toEqual({ ok: false, error: 'Choose a reward.' });
+    const xp0 = s.char.xp, lvl0 = s.char.level, gold0 = s.gold, rep0 = standing(s, data, 72);
+    expect(completeQuest(s, data, 400, 13).ok).toBe(true);
+    expect(s.inventory[13]).toBe(1);
+    expect(s.gold).toBe(gold0 + 50);
+    expect(s.char.level > lvl0 || s.char.xp > xp0).toBe(true);
+    expect(standing(s, data, 72)).toBe(rep0 + 250);
+    expect(availableQuests(s, data).map(q => q.id)).toContain(401);
+  });
+
+  it('quest-only drops roll only while the quest needs them', () => {
+    const s = fresh();
+    s.inventory[5] = 20;
+    s.questsDone.push(400);
+    startAction(s, data, { kind: 'fight', creature: 100 });
+    advance(s, data, T0 + 10 * 60_000);
+    expect(s.inventory[7]).toBeUndefined();
+    acceptQuest(s, data, 401);
+    advance(s, data, T0 + 30 * 60_000);
+    expect(s.inventory[7]).toBe(3); // stops at what the quest needs
+    stopAction(s);
+    expect(completeQuest(s, data, 401).ok).toBe(true);
+    expect(s.inventory[7]).toBeUndefined();
+  });
+
+  it('timed task quests run as an action and are handed in at the ender', () => {
+    const s = fresh();
+    expect(acceptQuest(s, data, 402).ok).toBe(true);
+    expect(startAction(s, data, { kind: 'quest', quest: 402 }).ok).toBe(true);
+    advance(s, data, T0 + 60_000);
+    expect(questComplete(s, data, 402)).toBe(false);
+    advance(s, data, T0 + 2 * 60_000);
+    expect(questComplete(s, data, 402)).toBe(true);
+    expect(s.action).toBeNull();
+    expect(completeQuest(s, data, 402).ok).toBe(false); // the ender is in Grumblevale
+    s.zone = 2;
+    expect(completeQuest(s, data, 402).ok).toBe(true);
+    expect(abandonQuest(s, data, 402).ok).toBe(false);
+  });
+
+  it('kill reputation stops at its cap, and reputation gates vendor items', () => {
+    const s = fresh();
+    s.gold = 1000;
+    s.char.level = 2;
+    expect(buy(s, data, 12)).toEqual({ ok: false, error: 'Requires Friendly with Testwind.' });
+    s.inventory[5] = 50;
+    startAction(s, data, { kind: 'fight', creature: 100 });
+    advance(s, data, T0 + 6 * 3_600_000);
+    expect(standing(s, data, 72)).toBe(8999); // top of Friendly, the boars' max
+    expect(repRank(standing(s, data, 72))).toBe(4);
+    stopAction(s);
+    expect(buy(s, data, 12).ok).toBe(true);
+    const horde = newGame(data, { name: 'Grunt', race: 2, cls: 1, seed: 1, now: T0 });
+    expect(repRank(standing(horde, data, 72))).toBe(0); // Hated
   });
 });
 

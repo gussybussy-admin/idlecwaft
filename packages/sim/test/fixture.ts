@@ -61,6 +61,18 @@ export function fixture(): GameData {
       skinning: [{ name: 'Apprentice', max: 75, reqLevel: 1, cost: 10, spellId: 6 }], firstaid: [{ name: 'Apprentice', max: 75, reqLevel: 1, cost: 10, spellId: 7 }], alchemy: [{ name: 'Apprentice', max: 75, reqLevel: 1, cost: 10, spellId: 8 }], blacksmithing: [{ name: 'Apprentice', max: 75, reqLevel: 1, cost: 10, spellId: 9 }], enchanting: [{ name: 'Apprentice', max: 75, reqLevel: 1, cost: 10, spellId: 10 }],
       engineering: [{ name: 'Apprentice', max: 75, reqLevel: 1, cost: 10, spellId: 11 }], leatherworking: [{ name: 'Apprentice', max: 75, reqLevel: 1, cost: 10, spellId: 12 }], tailoring: [{ name: 'Apprentice', max: 75, reqLevel: 1, cost: 10, spellId: 13 }],
     },
+    factions: { 72: { id: 72, name: 'Testwind', parent: 0, base: { 1: 0, 2: -42000 } } },
+    quests: {
+      400: { id: 400, name: 'Boar Culling', level: 2, minLevel: 1, zone: 1, endZone: 1, giver: 'Marshal Test', ender: 'Marshal Test',
+        races: 0, classes: 0, sides: [...BOTH], kills: [[100, 5]], items: [], xp: 200, money: 50, moneyMax: 100, rewItems: [],
+        choice: [[12, 1], [13, 1]], rep: [[72, 250]], objectives: 'Kill 5 Test Boars.', next: 401 },
+      401: { id: 401, name: 'Tusks for the Cook', level: 3, minLevel: 1, zone: 1, endZone: 1, giver: 'Marshal Test', ender: 'Marshal Test',
+        races: 0, classes: 0, sides: [...BOTH], prev: 400, kills: [], items: [[7, 3]], xp: 300, money: 0, moneyMax: 0, rewItems: [[5, 5]],
+        choice: [], rep: [[72, 100]], objectives: 'Bring 3 Test Quest Tusks.' },
+      402: { id: 402, name: 'Report to Grumblevale', level: 2, minLevel: 1, zone: 1, endZone: 2, giver: 'Marshal Test', ender: 'Scout Grumble',
+        races: 0, classes: 0, sides: [...BOTH], kills: [], items: [], task: { ms: 90_000, label: 'Carry the report', grants: [] },
+        xp: 100, money: 10, moneyMax: 0, rewItems: [], choice: [], rep: [], objectives: 'Take the report to Scout Grumble.' },
+    },
     enchants: { 41: { id: 41, name: 'Health +25', stats: [], hp: 25, mana: 0, armor: 0, ap: 0, dmg: 0 } },
     zones: [{
       id: 1, name: 'Testwood', map: 0, x: 0, y: 0, city: false, levelMin: 1, levelMax: 3,
@@ -80,7 +92,7 @@ export function fixture(): GameData {
     creatures: {
       100: { id: 100, name: 'Test Boar', subname: '', levelMin: 1, levelMax: 2, rank: 0, type: 1, displayIds: [1], attackMs: 2000,
         stats: [{ hp: 40, dmgMin: 1, dmgMax: 3, armor: 10 }, { hp: 50, dmgMin: 2, dmgMax: 3, armor: 15 }],
-        goldMin: 1, goldMax: 5, loot: 'creature:100', skin: 'skin:100', hostile: [...BOTH] },
+        goldMin: 1, goldMax: 5, loot: 'creature:100', skin: 'skin:100', hostile: [...BOTH], rep: [{ faction: 72, value: 100, maxRank: 4 }] },
       101: { id: 101, name: 'Test Ogre', subname: '', levelMin: 12, levelMax: 12, rank: 1, type: 7, displayIds: [2], attackMs: 2000,
         stats: [{ hp: 2000, dmgMin: 60, dmgMax: 80, armor: 400 }], goldMin: 100, goldMax: 200, loot: null, hostile: [...BOTH] },
       102: { id: 102, name: 'Testwood Guard', subname: '', levelMin: 2, levelMax: 2, rank: 0, type: 7, displayIds: [3], attackMs: 2000,
@@ -103,7 +115,7 @@ export function fixture(): GameData {
       23: { id: 23, name: 'Test Bracers', quality: 1, icon: 'x', displayId: 0, class: 4, subclass: 1, invType: 9, reqLevel: 0, sellPrice: 1, buyPrice: 10, stack: 1, armor: 5, dmgMin: 0, dmgMax: 0, delayMs: 0, stats: [] },
       7005: { id: 7005, name: 'Skinning Knife', quality: 1, icon: 'x', displayId: 0, class: 7, subclass: 0, invType: 0, reqLevel: 0, sellPrice: 1, buyPrice: 10, stack: 20, armor: 0, dmgMin: 0, dmgMax: 0, delayMs: 0, stats: [] },
       5956: { id: 5956, name: 'Blacksmith Hammer', quality: 1, icon: 'x', displayId: 0, class: 7, subclass: 0, invType: 0, reqLevel: 0, sellPrice: 1, buyPrice: 10, stack: 20, armor: 0, dmgMin: 0, dmgMax: 0, delayMs: 0, stats: [] },
-      12: { id: 12, name: 'Test Sword', quality: 2, itemLevel: 12, disenchant: 'de:1', icon: 'sword', displayId: 0, class: 2, subclass: 7, invType: 13, reqLevel: 2, sellPrice: 50, buyPrice: 100, stack: 1, armor: 0, dmgMin: 5, dmgMax: 9, delayMs: 2400, stats: [[4, 2]] },
+      12: { id: 12, name: 'Test Sword', quality: 2, itemLevel: 12, disenchant: 'de:1', reqRep: [72, 4], icon: 'sword', displayId: 0, class: 2, subclass: 7, invType: 13, reqLevel: 2, sellPrice: 50, buyPrice: 100, stack: 1, armor: 0, dmgMin: 5, dmgMax: 9, delayMs: 2400, stats: [[4, 2]] },
     },
     nodes: { 200: { id: 200, name: 'Test Vein', skill: 'mining', reqSkill: 1, displayId: 0, loot: 'go:200' } },
     recipes: {

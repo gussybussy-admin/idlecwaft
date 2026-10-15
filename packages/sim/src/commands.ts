@@ -4,8 +4,9 @@ import type { GameData } from './data.js';
 import type { Action, GameState, Profession, Slot } from './state.js';
 import { PROFESSIONS, SLOTS } from './state.js';
 import { learnTalent, resetTalents } from './talents.js';
+import { abandonQuest, acceptQuest } from './quests.js';
 import {
-  buy, disenchant, equip, learnRecipe, unlearnProfession, sell, startAction, stopAction, train, trainRiding, trainSpells, unequip, type CommandResult,
+  buy, completeQuest, disenchant, equip, learnRecipe, unlearnProfession, sell, startAction, stopAction, train, trainRiding, trainSpells, unequip, type CommandResult,
 } from './engine.js';
 
 export type Command =
@@ -24,7 +25,10 @@ export type Command =
   | { name: 'learnTalent'; talent: number }
   | { name: 'resetTalents' }
   | { name: 'unlearn'; skill: Profession }
-  | { name: 'disenchant'; item: number };
+  | { name: 'disenchant'; item: number }
+  | { name: 'acceptQuest'; quest: number }
+  | { name: 'abandonQuest'; quest: number }
+  | { name: 'turnInQuest'; quest: number; choice?: number };
 
 const int = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 
@@ -45,6 +49,7 @@ export function parseCommand(raw: unknown): Command | null {
         if (SLOTS.includes(a.slot as Slot)) action.slot = a.slot as Slot;
         return { name: 'start', action };
       }
+      if (a.kind === 'quest' && int(a.quest, 1, 1e7)) return { name: 'start', action: { kind: 'quest', quest: a.quest as number } };
       if (a.kind === 'travel' && int(a.to, 1, 1e7)) return { name: 'start', action: { kind: 'travel', to: a.to as number } };
       return null;
     }
@@ -52,6 +57,11 @@ export function parseCommand(raw: unknown): Command | null {
     case 'learnTalent': return int(c.talent, 1, 1e7) ? { name: 'learnTalent', talent: c.talent as number } : null;
     case 'unlearn': return PROFESSIONS.includes(c.skill as Profession) ? { name: 'unlearn', skill: c.skill as Profession } : null;
     case 'disenchant': return int(c.item, 1, 1e7) ? { name: 'disenchant', item: c.item as number } : null;
+    case 'acceptQuest': case 'abandonQuest': return int(c.quest, 1, 1e7) ? { name: c.name, quest: c.quest as number } : null;
+    case 'turnInQuest': {
+      if (!int(c.quest, 1, 1e7)) return null;
+      return int(c.choice, 1, 1e7) ? { name: 'turnInQuest', quest: c.quest as number, choice: c.choice as number } : { name: 'turnInQuest', quest: c.quest as number };
+    }
     case 'train': return PROFESSIONS.includes(c.skill as Profession) ? { name: 'train', skill: c.skill as Profession } : null;
     case 'learnRecipe': return int(c.recipe, 1, 1e7) ? { name: 'learnRecipe', recipe: c.recipe as number } : null;
     case 'buy': case 'sell':
@@ -91,6 +101,9 @@ export function applyCommand(s: GameState, data: GameData, c: Command): CommandR
     case 'resetTalents': return resetTalents(s);
     case 'unlearn': return unlearnProfession(s, data, c.skill);
     case 'disenchant': return disenchant(s, data, c.item);
+    case 'acceptQuest': return acceptQuest(s, data, c.quest);
+    case 'abandonQuest': return abandonQuest(s, data, c.quest);
+    case 'turnInQuest': return completeQuest(s, data, c.quest, c.choice);
     case 'settings':
       if (c.autoEat !== undefined) s.settings.autoEat = c.autoEat;
       if (c.eatBelowPct !== undefined) s.settings.eatBelowPct = c.eatBelowPct;

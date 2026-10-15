@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   canFish, canGather, equipSlots, factionOfRace, fishingCatchChance, gatherColor, killXp, MAX_PRIMARY,
-  playerStats, PRIMARY_PROFESSIONS, PROFESSIONS, SKILL_NAME, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
+  playerStats, PRIMARY_PROFESSIONS, REP_RANKS, PROFESSIONS, SKILL_NAME, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
 } from '@idle/sim';
 import { game } from './game.js';
 import { Diorama, type Activity } from './diorama.js';
@@ -393,7 +393,7 @@ export function TownPage({ s, data }: P) {
             const it = data.items[item];
             return (
               <div key={item} className="card">
-                <div className="row"><ItemIcon id={item} data={data} /><div style={{ minWidth: 0 }}><div className={`title q${it.quality}`}>{it.name}</div><div className="meta">{vendor}</div></div></div>
+                <div className="row"><ItemIcon id={item} data={data} /><div style={{ minWidth: 0 }}><div className={`title q${it.quality}`}>{it.name}</div><div className="meta">{vendor}{it.reqRep && data.factions[it.reqRep[0]] ? ` · needs ${REP_RANKS[it.reqRep[1]]} with ${data.factions[it.reqRep[0]].name}` : ''}</div></div></div>
                 <div className="btn-row"><button className="btn secondary small" onClick={() => game.command({ name: 'buy', item, count: 1 })}>Buy <Money copper={it.buyPrice} /></button>
                   {it.stack > 1 && <button className="btn secondary small" onClick={() => game.command({ name: 'buy', item, count: 5 })}>x5 <Money copper={it.buyPrice * 5} /></button>}</div>
               </div>

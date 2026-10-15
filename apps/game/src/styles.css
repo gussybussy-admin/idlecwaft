@@ -231,3 +231,13 @@ input.text { background: #000; border: 1px solid var(--edge); border-radius: 4px
 .talent .rank { position: absolute; right: -6px; bottom: -6px; background: #000; border: 1px solid #555; border-radius: 4px; font-size: 10px; padding: 0 3px; color: #40c040; }
 .talent.max .rank { color: #ffd100; }
 .talent.locked .rank, .talent:not(.has):not(.can) .rank { color: #999; }
+
+/* quests + reputation */
+.choice-item { border: 2px solid transparent; border-radius: 6px; cursor: pointer; display: inline-flex; }
+.choice-item.on { border-color: var(--gold); }
+.bar.rep > .fill { background-color: #b0b0b0; }
+.bar.rep-0 > .fill, .bar.rep-1 > .fill { background-color: #cc2222; }
+.bar.rep-2 > .fill { background-color: #ee6622; }
+.bar.rep-3 > .fill { background-color: #e6c800; }
+.bar.rep-4 > .fill, .bar.rep-5 > .fill, .bar.rep-6 > .fill, .bar.rep-7 > .fill { background-color: #22aa22; }
+.rep-0, .rep-1 { color: #ff4444; } .rep-2 { color: #ff8040; } .rep-3 { color: #ffff00; } .rep-4, .rep-5, .rep-6, .rep-7 { color: #40c040; }

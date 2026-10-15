@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
-  CreatureDef, Faction, GameData, ItemDef, NodeDef, TaxiNode, TaxiPath, ZoneDef,
+  CreatureDef, Faction, GameData, ItemDef, LootRef, NodeDef, TaxiNode, TaxiPath, ZoneDef,
 } from '@idle/sim';
 import type { Client } from '../client.js';
 import { ZoneLookup } from './zone-lookup.js';
@@ -13,6 +13,7 @@ import { PATCH_1_12, VMangos, type Row } from './vmangos.js';
 import { buildClassSpells } from './class-spells.js';
 import { buildTalents } from './talents.js';
 import { buildEnchants, buildRecipes, buildSkillRanks } from './professions.js';
+import { buildFactions, buildQuests, killReputation } from './quests.js';
 
 const LOCKTYPE_HERBALISM = 2, LOCKTYPE_MINING = 3, LOCK_KEY_SKILL = 2;
 const GO_TYPE_CHEST = 3;
@@ -118,6 +119,7 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
   const nodes: Record<number, NodeDef> = {};
   const zones: ZoneDef[] = [];
   const templateCache = new Map<number, Row | undefined>();
+  const onKillRep = killReputation(vm);
   const template = (e: number) => { if (!templateCache.has(e)) templateCache.set(e, vm.creatureTemplate(e)); return templateCache.get(e); };
 
   for (const [zoneId, a] of acc) {
@@ -139,6 +141,7 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
       if (!hostile.length) continue;
       const def = creatures[entry] ?? creatureDef(t, classStats, vm, items, hostile);
       if (!def || (!def.loot && !def.goldMax)) continue; // nothing to farm (pets, scripted dummies)
+      if (onKillRep.has(entry)) def.rep = onKillRep.get(entry);
       creatures[entry] = def;
       zone.creatures.push({ id: entry, spawns });
       if (def.rank === 0 && hostile.length === 2) for (let i = 0; i < spawns; i++) levels.push((def.levelMin + def.levelMax) / 2);
@@ -225,6 +228,28 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
   const enchants = buildEnchants(client, vm, new Set(Object.values(recipes).flatMap(r => (r.enchant ? [r.enchant.id] : []))));
   log(`recipes: ${Object.keys(recipes).length}, enchantments: ${Object.keys(enchants).length}`);
 
+  // ---- quests: givers and enders placed by where they stand
+  const homeOf = (pick: (a: ZoneAcc) => Map<number, number>) => {
+    const best = new Map<number, [number, number]>();
+    for (const [zone, a] of acc) for (const [entry, n] of pick(a)) if ((best.get(entry)?.[1] ?? 0) < n) best.set(entry, [zone, n]);
+    return new Map([...best].map(([e, [z]]) => [e, z]));
+  };
+  const collectable = new Set<number>();
+  const walk = (ref: LootRef | null | undefined, seen = new Set<string>()) => {
+    const t = ref ? vm.tables[ref] : undefined;
+    if (!t || seen.has(ref!)) return;
+    seen.add(ref!);
+    for (const e of [...t.entries, ...t.groups.flat()]) { if ('item' in e) collectable.add(e.item); else walk(e.ref, seen); }
+  };
+  for (const c of Object.values(creatures)) { walk(c.loot); walk(c.skin); }
+  for (const nd of Object.values(nodes)) walk(nd.loot);
+  for (const z of zones) { walk(z.fishing?.loot); for (const v of z.vendorItems) collectable.add(v.item); }
+  for (const r of Object.values(recipes)) if (r.item) collectable.add(r.item);
+  const quests = buildQuests(vm, {
+    creatures, zones, npcZone: homeOf(a => a.creatures), goZone: homeOf(a => a.objects), collectable, traders, items,
+  });
+  log(`quests: ${Object.keys(quests).length} (${Object.values(quests).filter(q => q.task).length} with timed tasks)`);
+
   // ---- items
   const itemDefs: Record<number, ItemDef> = {};
   for (const id of items) {
@@ -267,6 +292,12 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
   }
 
   const skillRanks = buildSkillRanks(vm);
+  const usedFactions = new Set<number>([
+    ...Object.values(quests).flatMap(q => q.rep.map(([f]) => f)),
+    ...Object.values(creatures).flatMap(c => (c.rep ?? []).map(r => r.faction)),
+    ...Object.values(itemDefs).flatMap(i => (i.reqRep ? [i.reqRep[0]] : [])),
+  ]);
+  const factions = buildFactions(client, usedFactions);
 
   // ---- class spells, and where each class's trainers are
   const { spells, classSpells } = buildClassSpells(client, vm, castTimes, durations);
@@ -296,7 +327,7 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
     classes: classes.rows().map(r => ({ id: classes.u32(r, 0), name: classes.str(r, 5) })),
     raceClasses, startZones, classSkills, skillNames, spells, classSpells, classTrainerZones, talents, talentTabs,
     levelStats, classStats: classStatsOut, skillRanks,
-    zones, creatures, items: itemDefs, nodes, recipes, enchants, loot, taxiNodes, taxiPaths,
+    zones, creatures, items: itemDefs, nodes, recipes, enchants, quests, factions, loot, taxiNodes, taxiPaths,
   };
   const out = path.join(opts.cacheDir, 'data');
   fs.mkdirSync(out, { recursive: true });
@@ -361,6 +392,7 @@ function itemDef(t: Row, icons: Map<number, string>, vm: VMangos, durations: Map
     dmgMin: Number(t.dmg_min1), dmgMax: Number(t.dmg_max1), delayMs: Number(t.delay), stats,
     itemLevel: Number(t.item_level),
   };
+  if (Number(t.required_reputation_faction)) def.reqRep = [Number(t.required_reputation_faction), Number(t.required_reputation_rank)];
   if (Number(t.disenchant_id) && def.quality >= 2) {
     const key = `de:${Number(t.disenchant_id)}`;
     if (vm.tables[key]) def.disenchant = key;

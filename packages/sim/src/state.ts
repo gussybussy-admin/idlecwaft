@@ -2,6 +2,7 @@
 import type { GameData } from './data.js';
 import { seedRng, type RngState } from './rng.js';
 import type { CombatPhase } from './combat.js';
+import type { QuestProgress } from './quests.js';
 
 export type Profession =
   | 'mining' | 'herbalism' | 'skinning' | 'fishing' | 'cooking' | 'firstaid'
@@ -30,7 +31,9 @@ export type Action =
   | { kind: 'fish' }
   /** Craft a recipe until out of reagents (or `count` times). Enchants go on your item in `slot`. */
   | { kind: 'craft'; recipe: number; count?: number; slot?: Slot }
-  | { kind: 'travel'; to: number };
+  | { kind: 'travel'; to: number }
+  /** A quest's timed objective (talk to, deliver, use, escort). */
+  | { kind: 'quest'; quest: number };
 
 export interface Mob { id: number; level: number; hp: number; maxHp: number }
 
@@ -76,6 +79,10 @@ export interface GameState {
   riding: number;
   /** Weapon skill values by SkillLine id (cap 5 x level); Defense is skill 95. */
   combatSkills: Record<number, number>;
+  /** Quest log (progress by quest id), quests handed in, and reputation earned per faction (on top of the racial base). */
+  quests: Record<number, QuestProgress>;
+  questsDone: number[];
+  rep: Record<number, number>;
   action: Action | null;
   phase: Phase;
   settings: { autoEat: boolean; eatBelowPct: number; restBelowPct: number; autoSkin: boolean; potionBelowPct: number };
@@ -100,6 +107,7 @@ export function newGame(data: GameData, c: NewCharacter): GameState {
     // Starting spells (free at level 1), e.g. Heroic Strike, Fireball, Smite.
     spells: (data.classSpells?.[c.cls] ?? []).filter(o => o.level <= 1 && o.cost === 0).map(o => o.spell),
     talents: {},
+    quests: {}, questsDone: [], rep: {},
     action: null, phase: { p: 'idle' },
     settings: { autoEat: true, eatBelowPct: 50, restBelowPct: 60, autoSkin: true, potionBelowPct: 35 },
     stats: { kills: {}, deaths: 0, gathered: 0, caught: 0, cooked: 0, crafted: 0, skinned: 0 },
@@ -129,6 +137,7 @@ export function migrateState(s: GameState): GameState {
   s.char.mana ??= 0; s.char.rage ??= 0; s.char.energy ??= 100; s.char.powerAt ??= s.now;
   s.skills = { ...noSkills(), ...s.skills };
   s.enchants ??= {};
+  s.quests ??= {}; s.questsDone ??= []; s.rep ??= {};
   s.settings.autoSkin ??= true; s.settings.potionBelowPct ??= 35;
   s.stats.crafted ??= 0; s.stats.skinned ??= 0;
   const a = s.action as unknown as { kind: string; recipe?: number } | null;

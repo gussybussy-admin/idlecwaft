@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { playerStats, PRIMARY_PROFESSIONS, SKILL_NAME, pointsSpent, talentPoints, trainableSpells, type GameData, type GameState, type Profession, type Summary } from '@idle/sim';
+import { playerStats, questComplete, PRIMARY_PROFESSIONS, SKILL_NAME, pointsSpent, talentPoints, trainableSpells, type GameData, type GameState, type Profession, type Summary } from '@idle/sim';
 import { game } from './game.js';
 import { GuildPage } from './guild.js';
 import { TravelPage } from './travel.js';
 import { PowerBar, SpellbookPage, TalentsPage } from './spells.js';
 import { BagsPanel, CharacterPage, CombatPage, FishingPage, GatherPage, LogPage, SKILL_ICON, TownPage } from './pages.js';
 import { CraftPage, SkinningPage } from './crafting.js';
+import { QuestsPage, ReputationPage } from './quests.js';
 import { Bar, fmtTime, hideTip, Icon, ItemIcon, Money, TooltipHost } from './ui.js';
 import { randomLook, type Look } from './character.js';
 import { Diorama } from './diorama.js';
@@ -20,7 +21,7 @@ function CharacterPreview({ look }: { look: Look }) {
 }
 
 const CRAFTING: Profession[] = ['cooking', 'firstaid', 'alchemy', 'blacksmithing', 'enchanting', 'engineering', 'leatherworking', 'tailoring'];
-type Page = 'combat' | Profession | 'character' | 'spells' | 'talents' | 'bags' | 'town' | 'travel' | 'guild' | 'log';
+type Page = 'combat' | Profession | 'character' | 'spells' | 'talents' | 'quests' | 'reputation' | 'bags' | 'town' | 'travel' | 'guild' | 'log';
 
 export function App() {
   useSyncExternalStore(game.subscribe, game.getVersion);
@@ -52,6 +53,8 @@ export function App() {
         {page === 'log' && <LogPage s={s} data={data} />}
         {page === 'travel' && <TravelPage s={s} data={data} />}
         {page === 'spells' && <SpellbookPage s={s} data={data} />}
+        {page === 'quests' && <QuestsPage s={s} data={data} />}
+        {page === 'reputation' && <ReputationPage s={s} data={data} />}
         {page === 'talents' && <TalentsPage s={s} data={data} />}
       </div></main>
       {game.away && <AwayReport sum={game.away} data={data} />}
@@ -101,12 +104,14 @@ function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; pag
   const toNext = data.xpToNext[s.char.level] ?? 0;
   const cls = data.classes.find(c => c.id === s.char.cls)?.name;
   const actionPage: Page | null = !s.action ? null : s.action.kind === 'fight' ? 'combat' : s.action.kind === 'travel' ? 'travel' : s.action.kind === 'fish' ? 'fishing'
+    : s.action.kind === 'quest' ? 'quests'
     : s.action.kind === 'craft' ? (data.recipes[s.action.recipe]?.skill ?? null) : data.nodes[s.action.node]?.skill ?? null;
   const item = (p: Page, icon: string, label: string, right?: string) => (
     <button className={`${page === p ? 'on' : ''} ${actionPage === p ? 'active-action' : ''}`} onClick={() => setPage(p)}>
       <Icon name={icon} size="sm" /> {label} {right !== undefined && <span className="lvl">{right}</span>}
     </button>
   );
+  const readyQuests = Object.keys(s.quests).filter(id => questComplete(s, data, +id)).length;
   const newSpells = trainableSpells(s, data).length, freePoints = talentPoints(s.char.level) - pointsSpent(s);
   const skill = (p: Profession) => item(p, SKILL_ICON[p], SKILL_NAME[p], s.skills[p].max ? `${s.skills[p].level}/${s.skills[p].max}` : '—');
   return (
@@ -129,6 +134,7 @@ function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; pag
         </button>
         <div className="group">Adventure</div>
         {item('combat', 'Ability_Warrior_OffensiveStance', 'Combat', String(s.char.level))}
+        {item('quests', 'INV_Misc_Note_02', 'Quests', readyQuests ? `${readyQuests} ready` : String(Object.keys(s.quests).length))}
         <div className="group">Gathering</div>
         {skill('mining')}{skill('herbalism')}{skill('skinning')}{skill('fishing')}
         <div className="group">Production</div>
@@ -140,6 +146,7 @@ function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; pag
         {item('spells', 'INV_Misc_Book_09', 'Spellbook', newSpells ? `${newSpells} new` : undefined)}
         {item('talents', 'Ability_Marksmanship', 'Talents', freePoints > 0 ? String(freePoints) : undefined)}
         {item('bags', 'INV_Misc_Bag_08', 'Bags', String(Object.keys(s.inventory).length))}
+        {item('reputation', 'INV_Misc_Note_05', 'Reputation')}
         {item('travel', 'INV_Misc_Map_01', 'Travel')}
         {item('town', 'INV_Misc_Bag_10', 'Trainers & Vendors')}
         {item('log', 'INV_Misc_Note_01', 'Log & Settings')}
@@ -154,7 +161,9 @@ function ActivityLine({ s, data }: { s: GameState; data: GameData }) {
     : a.kind === 'fight' ? `Fighting ${data.creatures[a.creature]?.name}`
     : a.kind === 'gather' ? `${data.nodes[a.node]?.skill === 'mining' ? 'Mining' : 'Gathering'} ${data.nodes[a.node]?.name}`
     : a.kind === 'travel' ? `Travelling to ${data.zones.find(z => z.id === a.to)?.name}`
-    : a.kind === 'fish' ? 'Fishing' : `Cooking ${data.recipes[a.recipe]?.name}`;
+    : a.kind === 'quest' ? `${data.quests[a.quest]?.task?.label ?? 'Questing'}`
+    : a.kind === 'craft' ? `Crafting ${data.recipes[a.recipe]?.name ?? ''}`
+    : 'Fishing';
   return <div className="sub" style={{ color: a ? 'var(--gold-soft)' : undefined }}>{text}</div>;
 }
 

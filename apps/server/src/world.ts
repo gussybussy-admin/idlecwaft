@@ -494,6 +494,7 @@ export function activityText(s: GameState, data: GameData): string {
     case 'fish': return 'Fishing';
     case 'craft': { const r = data.recipes[a.recipe]; return r ? `${r.skill === 'cooking' ? 'Cooking' : 'Crafting'} ${r.name}` : 'Crafting'; }
     case 'travel': return `Travelling to ${data.zones.find(z => z.id === a.to)?.name ?? 'somewhere'}`;
+    case 'quest': return `Questing: ${data.quests[a.quest]?.name ?? 'a quest'}`;
   }
 }
 

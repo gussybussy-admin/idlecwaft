@@ -9,6 +9,7 @@ import {
 } from './combat.js';
 import { scaled } from './spells.js';
 import { activeTalentEffects, learnTalent, resetTalents, type TalentEffect } from './talents.js';
+import { creditKill, gainRep, neededQuestItems, repRank, REP_RANKS, sideOf, standing, turnInQuest } from './quests.js';
 import {
   ARMOR_SKILL, combatSkillupChance, SKILL_DEFENSE, SKILL_UNARMED, WEAPON_SKILL,
   armorReduction, disenchantReq, skinningReq, fishingCatchChance, fishingSkillupChance, gatherColor, healthFromStamina,
@@ -46,7 +47,8 @@ export type SimEvent =
   | { t: number; type: 'eat'; item: number }
   | { t: number; type: 'stop'; reason: string }
   | { t: number; type: 'arrive'; zone: number }
-  | { t: number; type: 'combatskill'; skill: number; level: number };
+  | { t: number; type: 'combatskill'; skill: number; level: number }
+  | { t: number; type: 'quest'; quest: number };
 
 export interface Summary {
   ms: number; xp: number; gold: number; kills: number; deaths: number; levels: number;
@@ -219,7 +221,40 @@ function step(s: GameState, data: GameData, emit: Emit): void {
     case 'fish': return stepFish(s, data, emit);
     case 'craft': return stepCraft(s, data, a.recipe, emit);
     case 'travel': return stepTravel(s, data, a.to, emit);
+    case 'quest': return stepQuestTask(s, data, a.quest, emit);
   }
+}
+
+// ---------------------------------------------------------------- quest tasks
+
+function stepQuestTask(s: GameState, data: GameData, id: number, emit: Emit): void {
+  const q = data.quests[id];
+  if (s.phase.p !== 'work') {
+    const err = canQuestTask(s, data, id);
+    if (err) return stop(s, err, emit);
+    s.phase = { p: 'work', from: s.now, until: s.now + q.task!.ms };
+    return;
+  }
+  s.quests[id].task = true;
+  for (const [it, n] of q.task!.grants) addItem(s, it, n);
+  log(s, 'info', `${q.name}: ${q.task!.label} - done.`);
+  emit({ t: s.now, type: 'quest', quest: id });
+  s.action = null;
+  s.phase = { p: 'idle' };
+}
+
+export function canQuestTask(s: GameState, data: GameData, id: number): string | null {
+  const q = data.quests?.[id];
+  if (!q || !s.quests[id]) return 'Not in your quest log.';
+  if (!q.task) return 'That quest has no task to do.';
+  if (s.quests[id].task) return 'Already done.';
+  if (s.zone !== q.zone && s.zone !== q.endZone) return `Do this in ${data.zones.find(z => z.id === q.zone)?.name ?? 'the quest zone'}.`;
+  return null;
+}
+
+/** Hand in a quest (experience goes through the normal level-up path). */
+export function completeQuest(s: GameState, data: GameData, id: number, choice?: number, emit: Emit = () => {}): CommandResult {
+  return turnInQuest(s, data, id, choice, xp => gainXp(s, data, xp, emit));
 }
 
 function stop(s: GameState, reason: string, emit: Emit): void {
@@ -365,7 +400,7 @@ function onKill(s: GameState, data: GameData, def: CreatureDef, mob: Mob, emit: 
   s.char.rage = 0; // rage fades out of combat
   const xp = s.char.level < data.maxLevel ? killXp(s.char.level, mob.level, def.rank) : 0;
   const gold = def.goldMax ? int(s.rng, def.goldMin, def.goldMax) : 0;
-  const drops = rollLoot(data, def.loot, s.rng);
+  const drops = rollLoot(data, def.loot, s.rng, neededQuestItems(s, data));
   s.gold += gold;
   for (const [i, n] of drops) addItem(s, i, n);
   s.stats.kills[def.id] = (s.stats.kills[def.id] ?? 0) + 1;
@@ -373,6 +408,8 @@ function onKill(s: GameState, data: GameData, def: CreatureDef, mob: Mob, emit: 
   emit({ t: s.now, type: 'kill', creature: def.id, xp, gold, items });
   if (items.length) log(s, 'loot', `${def.name}: ${items.map(([i, n]) => `${data.items[i]?.name ?? i}${n > 1 ? ` x${n}` : ''}`).join(', ')}`);
   maybeSkin(s, data, def, mob, emit);
+  creditKill(s, data, def.id);
+  for (const r of def.rep ?? []) if (!r.side || r.side === sideOf(s, data)) gainRep(s, data, r.faction, r.value, r.maxRank);
   gainXp(s, data, xp, emit);
   const st = playerStats(s, data);
   if (s.char.hp < st.maxHp * s.settings.restBelowPct / 100) startRest(s, data, emit);
@@ -673,6 +710,7 @@ export function startAction(s: GameState, data: GameData, action: Action): Comma
     : action.kind === 'gather' ? canGather(s, data, action.node)
     : action.kind === 'fish' ? canFish(s, data)
     : action.kind === 'travel' ? canTravel(s, data, action.to)
+    : action.kind === 'quest' ? canQuestTask(s, data, action.quest)
     : canCraft(s, data, action.recipe, action.slot);
   if (err) return fail(err);
   if (s.phase.p === 'dead') return fail('You are dead. Wait to resurrect.');
@@ -773,6 +811,9 @@ export function buy(s: GameState, data: GameData, item: number, count = 1): Comm
   if (!zone?.vendorItems.some(v => v.item === item && v.factions.includes(faction))) return fail('No vendor here will sell that to you.');
   if (!Number.isInteger(count) || count < 1) return fail('Invalid amount.');
   const it = data.items[item];
+  if (it.reqRep && repRank(standing(s, data, it.reqRep[0])) < it.reqRep[1]) {
+    return fail(`Requires ${REP_RANKS[it.reqRep[1]]} with ${data.factions?.[it.reqRep[0]]?.name ?? 'that faction'}.`);
+  }
   const cost = it.buyPrice * count;
   if (s.gold < cost) return fail(`Costs ${formatMoney(cost)}.`);
   s.gold -= cost;
