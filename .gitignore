@@ -11,6 +11,11 @@ cache/
 # VMaNGOS world database (imported locally at runtime). Never commit.
 data/vmangos/
 
+# Launcher: per-player settings and converted art (from running it from source or next to the exe).
+launcher-data/
+idlecraft-cache/
+idlecraft-launcher.json
+
 # Game server database (accounts, characters, guild) and local server config.
 data/server/
 server.config.json

@@ -198,4 +198,12 @@ restarts.
 - Environment-mapped overlay layers are skipped; global-sequence tracks are held at their first key;
   hermite/bezier keys play linearly.
 - Bags have no slot limit yet.
-- Friends run the client from a copy of the repo (`npm run game`); a one-click launcher is future polish.
+- The launcher exe isn't code-signed, so Windows SmartScreen warns on first run.
+
+## Launcher (`apps/launcher`)
+
+A Node single-executable app (`npm run build:launcher` → `dist/launcher/IdlecraftLauncher.exe`):
+first-run setup (WoW folder, server address), art conversion from the player's own client into
+`idlecraft-cache/` keyed by the server's data version, and a localhost web server for the embedded
+client build + that cache. The build script refuses to embed anything but HTML/JS/CSS, and the game's
+Vite config gives production builds no public dir, so converted art can't end up in a distributable.

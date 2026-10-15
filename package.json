@@ -11,8 +11,10 @@
     "viewer": "npm run dev -w @idle/viewer",
     "game": "npm run dev -w @idle/game",
     "server": "npm start -w @idle/server",
+    "launcher": "npm run dev -w @idle/launcher",
+    "build:launcher": "npm run build -w @idle/launcher",
     "test": "vitest run",
-    "typecheck": "tsc -p packages/sim && tsc -p packages/assets && tsc -p apps/viewer && tsc -p apps/game && tsc -p apps/server"
+    "typecheck": "tsc -p packages/sim && tsc -p packages/assets && tsc -p apps/viewer && tsc -p apps/game && tsc -p apps/server && tsc -p apps/launcher"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

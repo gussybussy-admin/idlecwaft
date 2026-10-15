@@ -10,9 +10,7 @@ import { Client } from './client.js';
 import { convertCreature } from './convert/creature.js';
 import { printRecon } from './recon.js';
 import { buildGameData } from './import/build-game-data.js';
-import { convertIcons } from './convert/icons.js';
-import { convertUiAssets, UI_ICONS } from './convert/ui-assets.js';
-import { convertCharacters } from './convert/characters.js';
+import { convertArt } from './convert/art.js';
 
 const USAGE = `usage: idle-assets [--client <path>] [--cache <dir>] <command>
 
@@ -35,24 +33,6 @@ const flag = (name: string) => {
 const clientPath = flag('--client'), cacheDir = flag('--cache'), server = flag('--server');
 const [cmd, ...rest] = args;
 if (!cmd) { console.log(USAGE); process.exit(1); }
-
-/** Everything the game client renders for this data: icons, UI art, scenery, characters, creatures. */
-function convertArt(client: Client, data: GameData, cache: string): void {
-  const t0 = Date.now();
-  const icons = convertIcons(client, data, cache, UI_ICONS);
-  console.log(`icons: ${icons.written} written${icons.missing.length ? `, missing: ${icons.missing.join(', ')}` : ''}`);
-  convertUiAssets(client, cache, s => console.log(s));
-  convertCharacters(client, cache, [1, 2, 3, 4, 5, 6, 7, 8], s => console.log(s));
-  const displays = new Set<number>();
-  for (const z of data.zones) for (const c of z.creatures) for (const d of data.creatures[c.id].displayIds) displays.add(d);
-  let ok = 0; const skipped: string[] = [];
-  for (const id of displays) {
-    try { convertCreature(client, id, cache); ok++; } catch (e) { skipped.push(`${id} (${(e as Error).message.split(':')[0]})`); }
-  }
-  console.log(`creature models: ${ok} converted, ${skipped.length} skipped`);
-  if (skipped.length) console.log(`  skipped: ${skipped.slice(0, 12).join('; ')}${skipped.length > 12 ? ' …' : ''}`);
-  console.log(`art done in ${((Date.now() - t0) / 1000).toFixed(0)} s -> ${cache}`);
-}
 
 async function main() {
   const cfg = loadConfig({ ...(clientPath ? { clientPath } : {}), ...(cacheDir ? { cacheDir } : {}) });

@@ -68,9 +68,33 @@ machine), and log in or create an account. Every new account joins the guild.
 
 ## Playing with friends
 
-Each friend needs their own WoW 1.12.1 client, Node 20+, a copy of this repo and your VPN. They do
-**not** need VMaNGOS: the server sends them the game's data, and they convert the art from their own
-client:
+Each friend needs their own WoW 1.12.1 client and your VPN (e.g. Tailscale). They do **not** need
+VMaNGOS: the server sends the game's data, and the art is converted from their own client.
+
+### The launcher (recommended)
+
+Build it once on your machine:
+
+```bash
+npm run build:launcher
+```
+
+Send `dist/launcher/IdlecraftLauncher.exe` (Windows, ~68 MB, no Node needed) to your friends. It
+contains only this project's code and the Node runtime: no WoW art or data. A friend puts it in its own
+folder and double-clicks it:
+
+1. First run: it asks for their WoW 1.12.1 folder and your server address (a bare `100.x.y.z` is fine),
+   and remembers both in `idlecraft-launcher.json` next to the exe. Run with `--setup` to change them.
+2. It converts the art the guild's world needs from their client into `idlecraft-cache/` next to the
+   exe (about a minute the first time; again only when you add zones).
+3. It opens the game in their browser at `http://localhost:7431` with your server filled in. They keep
+   the launcher window open while playing.
+
+Windows SmartScreen will say "unknown publisher" (the exe isn't code-signed): **More info → Run anyway**.
+
+### From source (any OS)
+
+Friends with Node 20+ and a copy of this repo can instead:
 
 1. `npm install`
 2. Copy `idle.config.example.json` to `idle.config.json` and set `clientPath` to their client.
@@ -82,7 +106,8 @@ client:
 
 4. `npm run game`, open http://localhost:5174, enter `http://100.x.y.z:7420`, create an account.
 
-Re-run step 3 whenever the host adds zones.
+Re-run step 3 whenever the host adds zones. (`npm run launcher` runs the launcher from source too,
+after `npm run build -w @idle/game`.)
 
 ## Asset converter commands
 

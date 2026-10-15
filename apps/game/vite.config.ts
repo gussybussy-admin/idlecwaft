@@ -34,10 +34,12 @@ function devScreenshots(): Plugin {
   };
 }
 
-// Game data and converted assets are served from the player's local, gitignored cache.
-// Don't `vite build` this for distribution while it points at the cache: dist/ would contain it.
-export default defineConfig({
+// The dev server serves converted art from the player's local, gitignored cache. Production builds
+// (used by the launcher) get NO public dir, so no cache file can ever end up in dist/: the launcher
+// serves each player's own cache next to the build at runtime.
+export default defineConfig(({ command }) => ({
   plugins: [react(), devScreenshots()],
-  publicDir: cacheDir,
+  publicDir: command === 'serve' ? cacheDir : false,
   server: { port: 5174, strictPort: true },
-});
+  build: { outDir: 'dist', emptyOutDir: true, chunkSizeWarningLimit: 2000 },
+}));

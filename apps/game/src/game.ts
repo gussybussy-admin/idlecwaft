@@ -18,6 +18,10 @@ export type Phase = 'login' | 'connecting' | 'create' | 'playing';
 function storageGet(k: string): string | null { try { return localStorage.getItem(k); } catch { return null; } }
 function storageSet(k: string, v: string | null): void { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* ignore */ } }
 
+// The launcher opens the client with ?server=<guild server> so friends never type it.
+const serverParam = new URLSearchParams(location.search).get('server');
+if (serverParam) storageSet(SERVER_KEY, serverParam.replace(/\/+$/, ''));
+
 export class Game {
   serverUrl = storageGet(SERVER_KEY) ?? (import.meta.env.VITE_SERVER_URL as string | undefined) ?? `http://${location.hostname}:7420`;
   phase: Phase = 'login';
