@@ -64,3 +64,11 @@ run(process.execPath, [path.join(root, 'node_modules/postject/dist/cli.js'), exe
   ...(process.platform === 'darwin' ? ['--macho-segment-name', 'NODE_SEA'] : [])], { shell: false });
 for (const f of [seaConfig, blob, bundle]) fs.rmSync(f);
 console.log(`\nbuilt ${path.relative(root, exe)} (${(fs.statSync(exe).size / 1024 / 1024).toFixed(0)} MB)`);
+
+// The committed copy friends download from GitHub (contains only our code + the Node runtime).
+if (process.platform === 'win32') {
+  const committed = path.join(root, 'release', path.basename(exe));
+  fs.mkdirSync(path.dirname(committed), { recursive: true });
+  fs.copyFileSync(exe, committed);
+  console.log(`copied to ${path.relative(root, committed)} — commit it to publish the new version`);
+}

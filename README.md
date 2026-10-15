@@ -73,15 +73,12 @@ VMaNGOS: the server sends the game's data, and the art is converted from their o
 
 ### The launcher (recommended)
 
-Build it once on your machine:
+Friends download [`release/IdlecraftLauncher.exe`](release/IdlecraftLauncher.exe) from this repository
+(Windows, ~68 MB, no Node needed — it's built in). It contains only this project's code and the Node
+runtime: no WoW art or data. After code changes, rebuild it with `npm run build:launcher` (this also
+refreshes `release/`) and commit the new exe.
 
-```bash
-npm run build:launcher
-```
-
-Send `dist/launcher/IdlecraftLauncher.exe` (Windows, ~68 MB, no Node needed) to your friends. It
-contains only this project's code and the Node runtime: no WoW art or data. A friend puts it in its own
-folder and double-clicks it:
+A friend puts it in its own folder and double-clicks it:
 
 1. First run: it asks for their WoW 1.12.1 folder and your server address (a bare `100.x.y.z` is fine),
    and remembers both in `idlecraft-launcher.json` next to the exe. Run with `--setup` to change them.
