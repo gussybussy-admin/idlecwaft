@@ -4,7 +4,7 @@ import type { GameData } from './data.js';
 import type { Action, GameState, Profession, Slot } from './state.js';
 import { PROFESSIONS, SLOTS } from './state.js';
 import {
-  buy, equip, learnRecipe, sell, startAction, stopAction, train, unequip, type CommandResult,
+  buy, equip, learnRecipe, sell, startAction, stopAction, train, trainRiding, unequip, type CommandResult,
 } from './engine.js';
 
 export type Command =
@@ -17,7 +17,8 @@ export type Command =
   | { name: 'sellJunk' }
   | { name: 'equip'; item: number }
   | { name: 'unequip'; slot: Slot }
-  | { name: 'settings'; autoEat?: boolean; eatBelowPct?: number };
+  | { name: 'settings'; autoEat?: boolean; eatBelowPct?: number; restBelowPct?: number }
+  | { name: 'trainRiding' };
 
 const int = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 
@@ -33,9 +34,10 @@ export function parseCommand(raw: unknown): Command | null {
       if (a.kind === 'gather' && int(a.node, 1, 1e7)) return { name: 'start', action: { kind: 'gather', node: a.node as number } };
       if (a.kind === 'fish') return { name: 'start', action: { kind: 'fish' } };
       if (a.kind === 'cook' && int(a.recipe, 1, 1e7)) return { name: 'start', action: { kind: 'cook', recipe: a.recipe as number } };
+      if (a.kind === 'travel' && int(a.to, 1, 1e7)) return { name: 'start', action: { kind: 'travel', to: a.to as number } };
       return null;
     }
-    case 'stop': case 'sellJunk': return { name: c.name };
+    case 'stop': case 'sellJunk': case 'trainRiding': return { name: c.name };
     case 'train': return PROFESSIONS.includes(c.skill as Profession) ? { name: 'train', skill: c.skill as Profession } : null;
     case 'learnRecipe': return int(c.recipe, 1, 1e7) ? { name: 'learnRecipe', recipe: c.recipe as number } : null;
     case 'buy': case 'sell':
@@ -46,6 +48,7 @@ export function parseCommand(raw: unknown): Command | null {
       const out: Command = { name: 'settings' };
       if (typeof c.autoEat === 'boolean') out.autoEat = c.autoEat;
       if (int(c.eatBelowPct, 10, 99)) out.eatBelowPct = c.eatBelowPct as number;
+      if (int(c.restBelowPct, 10, 99)) out.restBelowPct = c.restBelowPct as number;
       return out;
     }
     default: return null;
@@ -66,9 +69,11 @@ export function applyCommand(s: GameState, data: GameData, c: Command): CommandR
     }
     case 'equip': return equip(s, data, c.item);
     case 'unequip': return unequip(s, data, c.slot);
+    case 'trainRiding': return trainRiding(s);
     case 'settings':
       if (c.autoEat !== undefined) s.settings.autoEat = c.autoEat;
       if (c.eatBelowPct !== undefined) s.settings.eatBelowPct = c.eatBelowPct;
+      if (c.restBelowPct !== undefined) s.settings.restBelowPct = c.restBelowPct;
       return { ok: true };
   }
 }

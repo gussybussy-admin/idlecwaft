@@ -131,7 +131,13 @@ renderer.setAnimationLoop(t => {
   renderer.render(scene, camera);
 });
 
-const manifest: Record<string, ManifestEntry> = await fetch('creatures/index.json').then(r => r.json()).catch(() => ({}));
+// Displays to show: ?ids=31,188,346 (each needs creatures/<id>.json in the cache: npm run assets -- creature <id>).
+const ids = (new URLSearchParams(location.search).get('ids') ?? '31,188,346').split(',').map(Number).filter(Boolean);
+const manifest: Record<string, ManifestEntry> = {};
+for (const id of ids) {
+  const e = await fetch(`creatures/${id}.json`).then(r => r.ok ? r.json() as Promise<ManifestEntry> : null).catch(() => null);
+  if (e?.file) manifest[id] = e;
+}
 const entries = Object.values(manifest);
 if (!entries.length) {
   statusEl.textContent = 'No converted creatures in the cache.\nRun: npm run assets -- creature 31';

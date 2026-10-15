@@ -75,9 +75,12 @@ export function meleeAttackPower(cls: number, level: number, str: number, agi: n
   }
 }
 
-/** Out-of-combat health regeneration per second (approximation of vanilla spirit regen). */
-export function healthRegenPerSec(spirit: number): number {
-  return spirit * 0.25 + 3;
+/**
+ * Natural out-of-combat health regeneration per second: deliberately only 1 HP per minute, so food
+ * (fishing, cooking, vendors) is how a fighter recovers. Spirit doesn't change it (design choice).
+ */
+export function healthRegenPerSec(_spirit: number): number {
+  return 1 / 60;
 }
 
 /** Miss chance (%) for an attacker with `skill` against `defense` (both 5 per level for mobs). */

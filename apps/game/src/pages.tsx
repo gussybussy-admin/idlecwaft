@@ -1,7 +1,7 @@
 // Game pages: combat, gathering, fishing, cooking, character, town, log.
 import { useEffect, useRef, useState } from 'react';
 import {
-  canCook, canFish, canGather, equipSlots, fishingCatchChance, gatherColor, killXp,
+  canCook, canFish, canGather, equipSlots, factionOfRace, fishingCatchChance, gatherColor, killXp,
   playerStats, recipeColor, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
 } from '@idle/sim';
 import { game } from './game.js';
@@ -19,8 +19,10 @@ export function CombatPage({ s, data }: P) {
   const fighting = s.action?.kind === 'fight' ? s.action.creature : null;
   const [showAll, setShowAll] = useState(false);
   const lvl = s.char.level;
+  const faction = factionOfRace(data, s.char.race);
   const list = zone.creatures.filter(c => {
     const d = data.creatures[c.id];
+    if (!d.hostile.includes(faction)) return false; // your own faction's guards and townsfolk
     return showAll || (d.levelMax >= lvl - 6 && d.levelMin <= lvl + 4) || c.id === fighting;
   });
   return (
@@ -49,7 +51,7 @@ export function CombatPage({ s, data }: P) {
                   {d.rank > 0 && <span className={`tag ${d.rank === 4 || d.rank === 2 ? 'rare' : 'elite'}`}>{RANKS[d.rank]}</span>}
                 </div>
                 <div className="tags"><span className="tag">{xp} XP</span>{d.goldMax > 0 && <span className="tag"><Money copper={Math.round((d.goldMin + d.goldMax) / 2)} /></span>}<span className="tag">hits {st.dmgMin}-{st.dmgMax}</span></div>
-                <div className="row" style={{ gap: 4 }}>{topDrops(d.loot, 5).map(([item, pct]) => (
+                <div className="row" style={{ gap: 4 }}>{topDrops(data, d.loot, 5).map(([item, pct]) => (
                   <span key={item} {...withTip(() => <><ItemTooltip item={data.items[item]} data={data} /><div className="t-muted">Drop chance ~{pct < 1 ? pct.toFixed(2) : pct.toFixed(0)}%</div></>)}>
                     <ItemIcon id={item} data={data} size="sm" />
                   </span>))}</div>
@@ -158,7 +160,7 @@ export function GatherPage({ s, data, skill }: P & { skill: 'mining' | 'herbalis
           const n = data.nodes[id];
           const color = sk.max ? gatherColor(sk.level, n.reqSkill) : 'red';
           const err = canGather(s, data, id);
-          const drops = topDrops(n.loot, 4);
+          const drops = topDrops(data, n.loot, 4);
           return (
             <div key={id} className={`card ${current === id ? 'current' : ''} ${color === 'red' ? 'locked' : ''}`}>
               <div className="row">
@@ -200,7 +202,7 @@ export function FishingPage({ s, data }: P) {
             <div className="title">Fishing in {zone.name}</div>
             <div className="meta">Catch chance {fishingCatchChance(s.skills.fishing.level, f.zoneSkill).toFixed(0)}% · bobber waits 5-18s</div>
           </div></div>
-          <div className="row" style={{ gap: 4, flexWrap: 'wrap' }}>{topDrops(f.loot, 10).map(([i, p]) => (
+          <div className="row" style={{ gap: 4, flexWrap: 'wrap' }}>{topDrops(data, f.loot, 10).map(([i, p]) => (
             <span key={i} {...withTip(() => <><ItemTooltip item={data.items[i]} data={data} /><div className="t-muted">~{p.toFixed(p < 1 ? 2 : 0)}% of catches</div></>)}><ItemIcon id={i} data={data} /></span>))}</div>
           {active && <WorkBar s={s} />}
           <div className="btn-row">
@@ -382,7 +384,10 @@ export function TownPage({ s, data }: P) {
     if (it.tool || it.food) return true;
     return Object.values(data.recipes).some(r => r.reagents.some(([i]) => i === id));
   };
-  const items = zone.vendorItems.filter(v => data.items[v.item] && (filter === 'all' || useful(v.item)));
+  const faction = factionOfRace(data, s.char.race);
+  const seen = new Set<number>();
+  const items = zone.vendorItems.filter(v => data.items[v.item] && v.factions.includes(faction) && !seen.has(v.item) && seen.add(v.item)
+    && (filter === 'all' || useful(v.item)));
   return (
     <>
       <div className="panel-head"><h2>Trainers & Vendors</h2><span className="muted">{zone.name}</span></div>
@@ -434,9 +439,15 @@ export function LogPage({ s }: P) {
         <div className="log">{[...s.log].reverse().map((l, i) => <div key={i} className={l.kind}><span className="faint">{new Date(l.t).toLocaleTimeString()}</span> {l.text}</div>)}</div></div>
       <div className="panel"><div className="panel-head"><h3>Settings</h3></div>
         <div className="btn-row">
+          <label className="muted">Rest between fights below <input type="number" min={10} max={99} value={s.settings.restBelowPct} style={{ width: 52 }}
+            onChange={e => game.command({ name: 'settings', restBelowPct: Math.max(10, Math.min(99, +e.target.value || 60)) })} />% health</label>
           <label><input type="checkbox" checked={s.settings.autoEat} onChange={e => game.command({ name: 'settings', autoEat: e.target.checked })} /> Eat food while resting</label>
-          <label className="muted">below <input type="number" min={10} max={99} value={s.settings.eatBelowPct} style={{ width: 52 }}
-            onChange={e => game.command({ name: 'settings', eatBelowPct: Math.max(10, Math.min(99, +e.target.value || 50)) })} />% health</label>
+        </div>
+        <p className="faint" style={{ fontSize: 12, marginBottom: 0 }}>
+          Health only comes back on its own at 1 point per minute. Food from fishing, cooking and vendors is how you recover;
+          without it you'll wait a long time between fights.
+        </p>
+        <div>
         </div>
       </div>
       <div className="panel"><div className="panel-head"><h3>Account</h3></div>

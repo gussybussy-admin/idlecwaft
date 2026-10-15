@@ -1,23 +1,24 @@
-// Dev helper: summarize cache/data/game.json.
+// Dev helper: summarize cache/data/game.json.   tsx inspect-game-data.ts [zone name filter]
 import fs from 'node:fs';
 import path from 'node:path';
-import type { GameData } from '@idle/sim';
+import type { GameData, LootRef } from '@idle/sim';
 import { loadConfig } from '../config.js';
 
 const data: GameData = JSON.parse(fs.readFileSync(path.join(loadConfig().cacheDir, 'data/game.json'), 'utf8'));
+const filter = (process.argv[2] ?? '').toLowerCase();
+const lootSize = (k: LootRef | null) => { const t = k ? data.loot[k] : null; return t ? `${t.entries.length}+${t.groups.length}g` : '-'; };
+console.log(`${data.zones.length} zones, ${Object.keys(data.creatures).length} creatures, ${Object.keys(data.items).length} items, ${Object.keys(data.loot).length} loot tables, ${Object.keys(data.taxiNodes).length} flight nodes`);
 for (const z of data.zones) {
-  console.log(`== ${z.name}`);
-  for (const c of z.creatures) {
+  if (filter && !z.name.toLowerCase().includes(filter)) {
+    if (!filter) continue;
+    continue;
+  }
+  console.log(`== ${z.name} (map ${z.map}, ${z.levelMin}-${z.levelMax}${z.city ? ', city' : ''}) at ${z.x},${z.y}: ${z.creatures.length} creatures, ${z.nodes.length} nodes, ${z.vendorItems.length} vendor items, taxi ${z.taxiNodes.map(t => data.taxiNodes[t].name).join('; ')}`);
+  for (const c of z.creatures.slice(0, 60)) {
     const d = data.creatures[c.id], s = d.stats[0];
-    console.log(`  ${String(c.id).padStart(6)} ${d.name.padEnd(28)} L${d.levelMin}-${d.levelMax} r${d.rank} t${d.type} x${c.spawns} hp${s.hp} dmg${s.dmgMin}-${s.dmgMax}/${d.attackMs}ms gold${d.goldMin}-${d.goldMax} loot=${d.loot ? d.loot.entries.length + '+' + d.loot.groups.length + 'g' : '-'} disp=${d.displayIds.join(',')}`);
+    console.log(`  ${String(c.id).padStart(6)} ${d.name.padEnd(28)} L${d.levelMin}-${d.levelMax} r${d.rank} x${c.spawns} hp${s.hp} dmg${s.dmgMin}-${s.dmgMax} hostile=${d.hostile.join('/')} loot=${lootSize(d.loot)}`);
   }
   for (const n of z.nodes) console.log(`  node ${data.nodes[n.id].name} (${data.nodes[n.id].skill} ${data.nodes[n.id].reqSkill}) x${n.spawns}`);
-  const fish = z.fishing ? [...z.fishing.loot.entries, ...z.fishing.loot.groups.flat()] : [];
-  console.log(`  fishing (zone skill ${z.fishing?.zoneSkill}): ${fish.map(e => 'item' in e ? `${data.items[e.item]?.name}:${e.chance}` : 'ref').join(', ')}`);
 }
-for (const r of Object.values(data.recipes)) {
-  console.log(`recipe ${r.name}: ${r.reagents.map(([i, n]) => `${n}x ${data.items[i]?.name}`).join(' + ')} -> ${data.items[r.item]?.name} [${r.orange}/${r.yellow}/${r.green}/${r.grey}] ${'trainer' in r.source ? `trainer ${r.source.trainer}c` : `recipe item ${r.source.recipeItem}`}`);
-}
-for (const [skill, ranks] of Object.entries(data.skillRanks)) console.log(`ranks ${skill}: ${ranks.map(r => `${r.name} ${r.max} L${r.reqLevel} ${r.cost}c`).join(', ')}`);
-const food = Object.values(data.items).filter(i => i.food).slice(0, 8);
-console.log('food:', food.map(i => `${i.name} heal ${i.food!.heal}/${i.food!.durationMs}ms`).join('; '));
+if (!filter) process.exit(0);
+console.log('races', data.races.map(r => `${r.name}:${r.faction}:start ${data.zones.find(z => z.id === data.startZones[r.id])?.name}:classes ${data.raceClasses[r.id]}`).join(' | '));

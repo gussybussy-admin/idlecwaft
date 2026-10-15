@@ -8,6 +8,8 @@ export interface DBC {
   i32(r: number, f: number): number;
   f32(r: number, f: number): number;
   str(r: number, f: number): string;
+  /** Raw byte at a byte offset within a record (for tables packed tighter than 4-byte fields). */
+  u8(r: number, byte: number): number;
   isStringStart(off: number): boolean;
   rows(): number[];
 }
@@ -30,6 +32,7 @@ export function parseDBC(buf: Buffer): DBC {
       const end = strings.indexOf(0, off);
       return strings.toString('utf8', off, end < 0 ? stringSize : end);
     },
+    u8: (r, byte) => buf[dataStart + r * recordSize + byte],
     isStringStart: off => off === 0 || (off < stringSize && strings[off - 1] === 0),
     rows: () => Array.from({ length: records }, (_, r) => r),
   };

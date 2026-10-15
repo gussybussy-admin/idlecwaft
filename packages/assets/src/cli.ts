@@ -15,7 +15,8 @@ import { convertArt } from './convert/art.js';
 const USAGE = `usage: idle-assets [--client <path>] [--cache <dir>] <command>
 
 commands:
-  art --server <url>        (players) convert the art your guild server's world needs, from your own client
+  art --server <url> [--all] (players) convert the art the game needs up front (creature models and item
+                            icons otherwise convert on demand while playing; --all converts everything now)
   import [zoneId...]        (server host) build cache/data/game.json from the client + VMaNGOS DB
                             (default: 12 Elwynn), then convert the art it needs
   recon                     inventory the client: archives, DBC counts
@@ -31,6 +32,7 @@ const flag = (name: string) => {
   return v;
 };
 const clientPath = flag('--client'), cacheDir = flag('--cache'), server = flag('--server');
+const allArt = args.includes('--all') ? (args.splice(args.indexOf('--all'), 1), true) : false;
 const [cmd, ...rest] = args;
 if (!cmd) { console.log(USAGE); process.exit(1); }
 
@@ -58,13 +60,13 @@ async function main() {
         }
         break;
       case 'import': {
-        const zones = rest.length ? rest.map(Number) : [12];
+        const zones = rest.map(Number); // empty: every zone
         const data = buildGameData(client, { zones, cacheDir: cfg.cacheDir, repoRoot: findRepoRoot(), log: s => console.log(s) });
         for (const z of data.zones) {
           console.log(`${z.name} (${z.levelMin}-${z.levelMax}): ${z.creatures.length} creatures, ${z.nodes.length} node types, fishing ${z.fishing ? `yes (zone skill ${z.fishing.zoneSkill})` : 'no'}, ${z.vendorItems.length} vendor items`);
         }
         console.log(`items ${Object.keys(data.items).length}, recipes ${Object.keys(data.recipes).length} -> cache/data/game.json`);
-        convertArt(client, data, cfg.cacheDir);
+        convertArt(client, data, cfg.cacheDir, console.log, allArt);
         break;
       }
       case 'art': {
@@ -78,7 +80,7 @@ async function main() {
         fs.mkdirSync(path.join(cfg.cacheDir, 'data'), { recursive: true });
         fs.writeFileSync(path.join(cfg.cacheDir, 'data/game.json'), text);
         console.log(`world: ${data.zones.map(z => z.name).join(', ')}; ${Object.keys(data.items).length} items`);
-        convertArt(client, data, cfg.cacheDir);
+        convertArt(client, data, cfg.cacheDir, console.log, allArt);
         break;
       }
       default:

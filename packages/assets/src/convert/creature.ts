@@ -58,12 +58,10 @@ export function convertCreature(client: Client, displayId: number, cacheDir: str
   });
 }
 
+/** One small JSON per display (creatures/<id>.json): scale, model, and the humanoid recipe if any. */
 function writeManifest(cacheDir: string, displayId: number, entry: CreatureManifestEntry): CreatureManifestEntry {
   const outDir = path.join(cacheDir, 'creatures');
   fs.mkdirSync(outDir, { recursive: true });
-  const manifestPath = path.join(outDir, 'index.json');
-  const manifest: Record<string, CreatureManifestEntry> = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : {};
-  manifest[displayId] = entry;
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  fs.writeFileSync(path.join(outDir, `${displayId}.json`), JSON.stringify(entry));
   return entry;
 }

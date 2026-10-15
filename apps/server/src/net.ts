@@ -1,6 +1,7 @@
 // HTTP (register/login/game data) and WebSocket (game session) front-end for the World.
 import http from 'node:http';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { parseCommand, PROTOCOL_VERSION, type ClientMessage, type ServerMessage } from '@idle/sim';
 import type { DB } from './db.js';
@@ -15,6 +16,7 @@ export interface NetOptions { db: DB; world: World; gameDataJson: string; clock?
 
 export function createServer({ db, world, gameDataJson, clock = Date.now }: NetOptions) {
   const dataVersion = crypto.createHash('sha1').update(gameDataJson).digest('hex').slice(0, 16);
+  const gameDataGzip = zlib.gzipSync(gameDataJson, { level: 9 }); // ~9 MB of JSON compresses ~10x
   const sockets = new Map<WebSocket, { accountId: number; username: string } | null>();
 
   const send = (ws: WebSocket, msg: ServerMessage) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); };
@@ -53,8 +55,9 @@ export function createServer({ db, world, gameDataJson, clock = Date.now }: NetO
     if (req.method === 'GET' && url.pathname === '/api/health') return json(200, { ok: true, protocol: PROTOCOL_VERSION, dataVersion });
     if (req.method === 'GET' && url.pathname === '/api/gamedata') {
       if (req.headers['if-none-match'] === dataVersion) { res.writeHead(304); res.end(); return; }
-      res.writeHead(200, { 'content-type': 'application/json', etag: dataVersion });
-      res.end(gameDataJson);
+      const gzip = /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''));
+      res.writeHead(200, { 'content-type': 'application/json', etag: dataVersion, ...(gzip ? { 'content-encoding': 'gzip' } : {}) });
+      res.end(gzip ? gameDataGzip : gameDataJson);
       return;
     }
     if (req.method === 'POST' && ['/api/register', '/api/login', '/api/logout'].includes(url.pathname)) {

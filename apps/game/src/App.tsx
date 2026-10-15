@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { playerStats, type GameData, type GameState, type Profession, type Summary } from '@idle/sim';
 import { game } from './game.js';
 import { GuildPage } from './guild.js';
+import { TravelPage } from './travel.js';
 import { BagsPanel, CharacterPage, CombatPage, CookingPage, FishingPage, GatherPage, LogPage, SKILL_ICON, TownPage } from './pages.js';
 import { Bar, fmtTime, Icon, ItemIcon, Money, TooltipHost } from './ui.js';
 import { randomLook, type Look } from './character.js';
@@ -16,7 +17,7 @@ function CharacterPreview({ look }: { look: Look }) {
   return <div className="diorama" ref={host} style={{ height: 260, marginTop: 10 }} />;
 }
 
-type Page = 'combat' | Profession | 'character' | 'bags' | 'town' | 'guild' | 'log';
+type Page = 'combat' | Profession | 'character' | 'bags' | 'town' | 'travel' | 'guild' | 'log';
 
 export function App() {
   useSyncExternalStore(game.subscribe, game.getVersion);
@@ -45,6 +46,7 @@ export function App() {
         {page === 'bags' && <BagsPanel s={s} data={data} />}
         {page === 'town' && <TownPage s={s} data={data} />}
         {page === 'log' && <LogPage s={s} data={data} />}
+        {page === 'travel' && <TravelPage s={s} data={data} />}
       </div></main>
       {game.away && <AwayReport sum={game.away} data={data} />}
       <Toast />
@@ -92,7 +94,7 @@ function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; pag
   const st = playerStats(s, data);
   const toNext = data.xpToNext[s.char.level] ?? 0;
   const cls = data.classes.find(c => c.id === s.char.cls)?.name;
-  const actionPage: Page | null = !s.action ? null : s.action.kind === 'fight' ? 'combat' : s.action.kind === 'fish' ? 'fishing'
+  const actionPage: Page | null = !s.action ? null : s.action.kind === 'fight' ? 'combat' : s.action.kind === 'travel' ? 'travel' : s.action.kind === 'fish' ? 'fishing'
     : s.action.kind === 'cook' ? 'cooking' : data.nodes[s.action.node]?.skill ?? null;
   const item = (p: Page, icon: string, label: string, right?: string) => (
     <button className={`${page === p ? 'on' : ''} ${actionPage === p ? 'active-action' : ''}`} onClick={() => setPage(p)}>
@@ -126,6 +128,7 @@ function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; pag
         <div className="group">Character</div>
         {item('character', 'INV_Chest_Chain', 'Equipment')}
         {item('bags', 'INV_Misc_Bag_08', 'Bags', String(Object.keys(s.inventory).length))}
+        {item('travel', 'INV_Misc_Map_01', 'Travel')}
         {item('town', 'INV_Misc_Bag_10', 'Trainers & Vendors')}
         {item('log', 'INV_Misc_Note_01', 'Log & Settings')}
       </nav>
@@ -138,6 +141,7 @@ function ActivityLine({ s, data }: { s: GameState; data: GameData }) {
   const text = !a ? 'Idle'
     : a.kind === 'fight' ? `Fighting ${data.creatures[a.creature]?.name}`
     : a.kind === 'gather' ? `${data.nodes[a.node]?.skill === 'mining' ? 'Mining' : 'Gathering'} ${data.nodes[a.node]?.name}`
+    : a.kind === 'travel' ? `Travelling to ${data.zones.find(z => z.id === a.to)?.name}`
     : a.kind === 'fish' ? 'Fishing' : `Cooking ${data.recipes[a.recipe]?.name}`;
   return <div className="sub" style={{ color: a ? 'var(--gold-soft)' : undefined }}>{text}</div>;
 }
@@ -166,10 +170,9 @@ function AwayReport({ sum, data }: { sum: Summary; data: GameData }) {
   );
 }
 
-const CLASS_COMBOS: Record<number, number[]> = { 1: [1, 2, 4, 5, 8, 9], 3: [1, 2, 3, 4, 5], 4: [1, 3, 4, 5, 11], 7: [1, 4, 8, 9] };
 
 function CreateCharacter({ data }: { data: GameData }) {
-  const alliance = data.races.filter(r => r.faction === 'alliance');
+  const CLASS_COMBOS = data.raceClasses;
   const [race, setRace] = useState(1);
   const [cls, setCls] = useState(1);
   const [sex, setSex] = useState(0);
@@ -184,8 +187,8 @@ function CreateCharacter({ data }: { data: GameData }) {
       <p className="muted" style={{ margin: 0 }}>Create your character. Elwynn Forest awaits; the rest of Azeroth comes later.</p>
       <div className="panel">
         <h3>Race</h3>
-        <div className="choices" style={{ marginTop: 8 }}>{alliance.map(r => (
-          <button key={r.id} className={`choice ${race === r.id ? 'on' : ''}`} onClick={() => { setRace(r.id); if (!CLASS_COMBOS[r.id]?.includes(cls)) setCls(CLASS_COMBOS[r.id][0]); }}>{r.name}</button>))}</div>
+        {(['alliance', 'horde'] as const).map(side => (<div key={side}><div className="faint" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: 8 }}>{side}</div><div className="choices" style={{ marginTop: 4 }}>{data.races.filter(r => r.faction === side).map(r => (
+          <button key={r.id} className={`choice ${race === r.id ? 'on' : ''}`} onClick={() => { setRace(r.id); if (!CLASS_COMBOS[r.id]?.includes(cls)) setCls(CLASS_COMBOS[r.id][0]); }}>{r.name}</button>))}</div></div>))}
         <h3 style={{ marginTop: 16 }}>Class</h3>
         <div className="choices" style={{ marginTop: 8 }}>{classes.map(c => (
           <button key={c.id} className={`choice ${cls === c.id ? 'on' : ''}`} onClick={() => setCls(c.id)}>{c.name}</button>))}</div>

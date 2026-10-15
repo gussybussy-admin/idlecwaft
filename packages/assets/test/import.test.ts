@@ -26,6 +26,11 @@ describe.skipIf(!ready)('Elwynn import', () => {
       expect(names).not.toContain('Faire Cannon Trigger'); // event / trigger NPCs are excluded
       expect(z.nodes.map(n => data.nodes[n.id].name)).toEqual(expect.arrayContaining(['Copper Vein', 'Peacebloom', 'Silverleaf']));
       expect(z.fishing?.zoneSkill).toBe(-70);
+      // Stormwind's flight master is in the Stormwind City zone; Elwynn's unused "Northshire Abbey" node is dropped.
+      expect(z.taxiNodes).toEqual([]);
+      expect(Object.values(data.taxiNodes).find(n => n.name === 'Stormwind, Elwynn')).toMatchObject({ zone: 1519, factions: ['alliance'] });
+      expect(data.creatures[113].hostile).toEqual(['alliance', 'horde']); // Stonetusk Boar: everyone's prey
+      expect(data.startZones[1]).toBe(12);
       expect(Object.values(data.recipes).map(r => r.name)).toEqual(expect.arrayContaining(['Charred Wolf Meat', 'Roasted Boar Meat']));
       expect(data.items[117].food?.heal).toBe(61); // Tough Jerky: 61 health over 18 sec, as in the tooltip
 
@@ -33,6 +38,7 @@ describe.skipIf(!ready)('Elwynn import', () => {
       const s = newGame(data, { name: 'Test', race: 1, cls: 1, seed: 1, now: 0 });
       s.char.level = 5;
       s.gold = 1000;
+      s.inventory[117] = 50; // Tough Jerky: without food, health only returns at 1 HP a minute
       expect(startAction(s, data, { kind: 'fight', creature: 113 }).ok).toBe(true);
       advance(s, data, 30 * 60_000);
       expect(s.stats.kills[113]).toBeGreaterThan(10);

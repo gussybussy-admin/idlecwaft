@@ -24,8 +24,13 @@ function loadGLTF(url: string): Promise<GLTF | null> {
   return gltfCache.get(url)!;
 }
 
-let manifest: Promise<Record<string, { scale: number; humanoid?: HumanoidSpec }>> | null = null;
-const creatureManifest = () => (manifest ??= fetch('creatures/index.json').then(r => r.json()).catch(() => ({})));
+type DisplayEntry = { scale: number; humanoid?: HumanoidSpec };
+const displayCache = new Map<number, Promise<DisplayEntry | null>>();
+/** creatures/<id>.json (converted on first request by the launcher / dev server). */
+const displayEntry = (id: number) => {
+  if (!displayCache.has(id)) displayCache.set(id, fetch(`creatures/${id}.json`).then(r => r.ok ? r.json() as Promise<DisplayEntry> : null).catch(() => null));
+  return displayCache.get(id)!;
+};
 
 const MOB_X = 1.6, PLAYER_X = -1.6;
 
@@ -154,10 +159,12 @@ export class Diorama {
     const token = ++this.loadToken;
     if (this.mob) { this.scene.remove(this.mob.root); this.mob = null; }
     if (!displayIds?.length) return;
-    const known = await creatureManifest();
-    const usable = displayIds.filter(d => known[d]);
-    const id = usable.length ? usable[pick % usable.length] : undefined;
-    const entry = id !== undefined ? known[id] : undefined;
+    // Try this spawn's display first, then the others, until one converts.
+    let id: number | undefined, entry: DisplayEntry | null = null;
+    for (let i = 0; i < displayIds.length && !entry; i++) {
+      id = displayIds[(pick + i) % displayIds.length];
+      entry = await displayEntry(id);
+    }
     let model: ActorModel | null;
     if (entry?.humanoid) {
       const built = await buildCharacter(entry.humanoid);

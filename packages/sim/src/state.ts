@@ -13,7 +13,8 @@ export type Action =
   | { kind: 'fight'; creature: number }
   | { kind: 'gather'; node: number }
   | { kind: 'fish' }
-  | { kind: 'cook'; recipe: number };
+  | { kind: 'cook'; recipe: number }
+  | { kind: 'travel'; to: number };
 
 export interface Mob { id: number; level: number; hp: number; maxHp: number }
 
@@ -40,6 +41,10 @@ export interface GameState {
   inventory: Record<number, number>;
   equipment: Partial<Record<Slot, number>>;
   zone: number;
+  /** Discovered flight paths (TaxiNodes ids). */
+  taxi: number[];
+  /** Riding speed bonus in percent (0, 60, 100). */
+  riding: number;
   action: Action | null;
   phase: Phase;
   settings: { autoEat: boolean; eatBelowPct: number; restBelowPct: number };
@@ -59,7 +64,8 @@ export function newGame(data: GameData, c: NewCharacter): GameState {
     gold: 0,
     skills: { mining: { level: 0, max: 0 }, herbalism: { level: 0, max: 0 }, fishing: { level: 0, max: 0 }, cooking: { level: 0, max: 0 } },
     recipes: [], inventory: {}, equipment: {},
-    zone: data.zones[0]?.id ?? 12,
+    zone: data.startZones?.[c.race] ?? data.zones[0]?.id ?? 12,
+    taxi: [], riding: 0,
     action: null, phase: { p: 'idle' },
     settings: { autoEat: true, eatBelowPct: 50, restBelowPct: 60 },
     stats: { kills: {}, deaths: 0, gathered: 0, caught: 0, cooked: 0 },
@@ -68,7 +74,16 @@ export function newGame(data: GameData, c: NewCharacter): GameState {
   // Start at full health: base class HP + stamina HP (see playerStats).
   const [, , sta] = data.levelStats[c.race]?.[c.cls]?.[1] ?? [20, 20, 20, 20, 20];
   state.char.hp = (data.classStats[c.cls]?.[1]?.[0] ?? 20) + (sta <= 20 ? sta : 20 + (sta - 20) * 10);
+  // Starting zones come with their flight master known (vanilla players walk to it in minutes).
+  for (const id of data.zones.find(z => z.id === state.zone)?.taxiNodes ?? []) state.taxi.push(id);
   return state;
+}
+
+/** Brings saves from older data versions up to date (new fields get their defaults). */
+export function migrateState(s: GameState): GameState {
+  s.taxi ??= [];
+  s.riding ??= 0;
+  return s;
 }
 
 export function addItem(s: GameState, item: number, n: number): void {

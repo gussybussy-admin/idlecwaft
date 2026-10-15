@@ -1,10 +1,11 @@
-// Builds cache/data/game.json for the given zones from the client DBCs + VMaNGOS world DB.
-// Everything that decides *what exists* (skills, recipes' skill thresholds, zones, icons) comes from
-// the client; what the client never had (stats, spawns, loot, vendors) comes from VMaNGOS.
+// Builds cache/data/game.json from the client DBCs + VMaNGOS world DB, for every zone of both
+// continents (or a chosen subset). Everything that decides *what exists* (skills, recipe skill
+// thresholds, zones, flight paths, icons) comes from the client; what the client never had (stats,
+// spawns, loot, vendors, trainers) comes from VMaNGOS, pinned to patch 1.12.
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
-  CreatureDef, GameData, ItemDef, NodeDef, RecipeDef, SkillRank, ZoneDef,
+  CreatureDef, Faction, GameData, ItemDef, NodeDef, RecipeDef, SkillRank, TaxiNode, TaxiPath, ZoneDef,
 } from '@idle/sim';
 import type { Client } from '../client.js';
 import { ZoneLookup } from './zone-lookup.js';
@@ -18,7 +19,17 @@ const CREATURE_TYPE_CRITTER = 8, CREATURE_TYPE_NOT_SPECIFIED = 10;
 // Food / drink auras: MOD_REGEN / MOD_POWER_REGEN restore (basePoints + 1) every 5 seconds.
 const AURA_MOD_REGEN = 84, AURA_MOD_POWER_REGEN = 85, REGEN_TICK_MS = 5000;
 const SLA_LEARNED_WITH_SKILL = 1;
-const ALLIANCE_FACTIONS = new Set([1, 3, 4, 8, 72, 47, 54, 69, 469, 115]);
+
+// Faction.dbc ids of the playable factions and their capitals, per side.
+const PLAYER_FACTIONS: Record<Faction, Set<number>> = {
+  alliance: new Set([1, 3, 4, 8, 72, 47, 54, 69, 469, 115, 589, 730, 890]),
+  horde: new Set([2, 5, 6, 116, 67, 76, 68, 81, 530, 510, 729, 889]),
+};
+const GROUP_BIT: Record<Faction, number> = { alliance: 0x2, horde: 0x4 }; // FactionGroup masks; 0x1 = all players
+
+const START_ZONES: Record<number, number> = { 1: 12, 2: 14, 3: 1, 4: 141, 5: 85, 6: 215, 7: 1, 8: 14 };
+const CITIES = new Set([1519, 1537, 1657, 1637, 1638, 1497]);
+const EXCLUDED_ZONES = new Set([876, 616]); // GM Island, Hyjal (unfinished in vanilla)
 
 // Profession rank spells (Apprentice, Journeyman, Expert, Artisan). Costs/levels come from trainer data.
 const RANK_SPELLS: Record<keyof GameData['skillRanks'], number[]> = {
@@ -30,14 +41,18 @@ const RANK_SPELLS: Record<keyof GameData['skillRanks'], number[]> = {
 const RANK_NAMES = ['Apprentice', 'Journeyman', 'Expert', 'Artisan'];
 const RANK_LEVELS = [5, 10, 20, 35];
 
+/** `zones` empty = every zone on both continents. */
 export interface BuildOptions { zones: number[]; cacheDir: string; repoRoot: string; log?: (s: string) => void }
+
+interface ZoneAcc { creatures: Map<number, number>; objects: Map<number, number>; sx: number; sy: number; n: number; map: number }
 
 export function buildGameData(client: Client, opts: BuildOptions): GameData {
   const log = opts.log ?? (() => {});
+  const t0 = Date.now();
   const vm = VMangos.open(opts.repoRoot);
   const zl = new ZoneLookup(client);
   const items = new Set<number>();
-  const wanted = new Set(opts.zones);
+  const wanted = opts.zones.length ? new Set(opts.zones) : null;
 
   // ---- DBC lookups
   const areaTable = client.dbc('AreaTable');
@@ -51,74 +66,92 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
       lockReq.set(lock.u32(r, 0), { skill: idx === LOCKTYPE_MINING ? 'mining' : 'herbalism', req: lock.u32(r, 17 + i) });
     }
   }
-  const ft = client.dbc('FactionTemplate'); // 0 id, 1 faction, 3 ourMask, 4 friendlyMask, 5 hostileMask, 10-13 friends
-  const attackableFT = new Set<number>();
+  // FactionTemplate: 0 id, 1 faction, 3 ourMask, 4 friendlyMask, 5 hostileMask, 6-9 enemies, 10-13 friends
+  const ft = client.dbc('FactionTemplate');
+  const relation = new Map<number, Record<Faction, 'friendly' | 'neutral' | 'hostile'>>();
   for (const r of ft.rows()) {
-    const our = ft.u32(r, 3), friendly = ft.u32(r, 4);
-    const friends = [10, 11, 12, 13].map(f => ft.u32(r, f));
-    const friendlyToAlliance = (friendly & 0x3) || (our & 0x2) || friends.some(f => ALLIANCE_FACTIONS.has(f)) || ALLIANCE_FACTIONS.has(ft.u32(r, 1));
-    if (!friendlyToAlliance) attackableFT.add(ft.u32(r, 0));
+    const our = ft.u32(r, 3), friendly = ft.u32(r, 4), hostile = ft.u32(r, 5), faction = ft.u32(r, 1);
+    const enemies = [6, 7, 8, 9].map(f => ft.u32(r, f)), friends = [10, 11, 12, 13].map(f => ft.u32(r, f));
+    const rel = {} as Record<Faction, 'friendly' | 'neutral' | 'hostile'>;
+    for (const side of ['alliance', 'horde'] as Faction[]) {
+      const bit = GROUP_BIT[side], ids = PLAYER_FACTIONS[side];
+      if ((friendly & bit) || (our & bit) || friends.some(f => ids.has(f)) || ids.has(faction)) rel[side] = 'friendly';
+      else if ((hostile & (bit | 0x1)) || enemies.some(f => ids.has(f))) rel[side] = 'hostile';
+      else rel[side] = 'neutral';
+    }
+    relation.set(ft.u32(r, 0), rel);
   }
+  const attackers = (ftId: number): Faction[] => (['alliance', 'horde'] as Faction[]).filter(f => (relation.get(ftId)?.[f] ?? 'hostile') !== 'friendly');
+  const traders = (ftId: number): Faction[] => (['alliance', 'horde'] as Faction[]).filter(f => (relation.get(ftId)?.[f] ?? 'neutral') !== 'hostile');
+
   const durations = new Map(client.dbc('SpellDuration').rows().map(r => [client.dbc('SpellDuration').u32(r, 0), client.dbc('SpellDuration').i32(r, 1)]));
   const castTimes = new Map(client.dbc('SpellCastTimes').rows().map(r => [client.dbc('SpellCastTimes').u32(r, 0), client.dbc('SpellCastTimes').i32(r, 1)]));
   const idi = client.dbc('ItemDisplayInfo');
   const icons = new Map(idi.rows().map(r => [idi.u32(r, 0), idi.str(r, 5)]));
 
-  // ---- spawns -> zones
-  const creatureSpawns = new Map<number, Map<number, number>>(); // zone -> entry -> count
-  const vendorsByZone = new Map<number, Set<number>>();
+  // ---- spawns -> zones (the client's own terrain says which zone each spawn stands in)
+  const acc = new Map<number, ZoneAcc>();
+  const zoneAcc = (zone: number, map: number) => acc.get(zone) ?? acc.set(zone, { creatures: new Map(), objects: new Map(), sx: 0, sy: 0, n: 0, map }).get(zone)!;
   const eventCreatures = vm.eventCreatureGuids(), eventObjects = vm.eventGameobjectGuids();
   const spawnRows = vm.all(`SELECT guid, id, map, position_x x, position_y y FROM creature WHERE map IN (0,1) AND patch_min<=? AND patch_max>=?`, PATCH_1_12, PATCH_1_12);
   for (const s of spawnRows) {
     if (eventCreatures.has(Number(s.guid))) continue;
     const zone = zl.zoneAt(Number(s.map), Number(s.x), Number(s.y));
-    if (!wanted.has(zone)) continue;
-    const m = creatureSpawns.get(zone) ?? new Map<number, number>();
-    m.set(Number(s.id), (m.get(Number(s.id)) ?? 0) + 1);
-    creatureSpawns.set(zone, m);
+    if (!zone || EXCLUDED_ZONES.has(zone) || (wanted && !wanted.has(zone))) continue;
+    const a = zoneAcc(zone, Number(s.map));
+    a.creatures.set(Number(s.id), (a.creatures.get(Number(s.id)) ?? 0) + 1);
+    a.sx += Number(s.x); a.sy += Number(s.y); a.n++;
   }
-  const goSpawns = new Map<number, Map<number, number>>();
   const goRows = vm.all(`SELECT guid, id, map, position_x x, position_y y FROM gameobject WHERE map IN (0,1) AND patch_min<=? AND patch_max>=?`, PATCH_1_12, PATCH_1_12);
   for (const s of goRows) {
     if (eventObjects.has(Number(s.guid))) continue;
     const zone = zl.zoneAt(Number(s.map), Number(s.x), Number(s.y));
-    if (!wanted.has(zone)) continue;
-    const m = goSpawns.get(zone) ?? new Map<number, number>();
-    m.set(Number(s.id), (m.get(Number(s.id)) ?? 0) + 1);
-    goSpawns.set(zone, m);
+    if (!zone || EXCLUDED_ZONES.has(zone) || (wanted && !wanted.has(zone))) continue;
+    const a = zoneAcc(zone, Number(s.map));
+    a.objects.set(Number(s.id), (a.objects.get(Number(s.id)) ?? 0) + 1);
   }
-  log(`spawns: ${spawnRows.length} creatures, ${goRows.length} gameobjects scanned`);
+  log(`spawns: ${spawnRows.length} creatures, ${goRows.length} gameobjects in ${acc.size} zones`);
 
-  // ---- creatures
+  // Zone level ranges the client itself advertises (LFGDungeons type 4 = zone).
+  const lfg = client.dbc('LFGDungeons'); // 1 name, 10 min, 11 max, 12 type
+  const lfgRange = new Map<string, [number, number]>();
+  for (const r of lfg.rows()) if (lfg.u32(r, 12) === 4) lfgRange.set(lfg.str(r, 1).toLowerCase(), [lfg.u32(r, 10), lfg.u32(r, 11)]);
+
+  // ---- creatures, nodes, fishing, vendors per zone
   const classStats = new Map<string, Row>();
   for (const r of vm.all(`SELECT * FROM creature_classlevelstats`)) classStats.set(`${r.class}:${r.level}`, r);
   const creatures: Record<number, CreatureDef> = {};
+  const nodes: Record<number, NodeDef> = {};
   const zones: ZoneDef[] = [];
-  for (const zoneId of opts.zones) {
-    const zone: ZoneDef = { id: zoneId, name: areaName.get(zoneId) ?? `Zone ${zoneId}`, levelMin: 99, levelMax: 0,
-      creatures: [], nodes: [], fishing: null, vendorItems: [] };
-    for (const [entry, spawns] of creatureSpawns.get(zoneId) ?? []) {
-      const t = vm.creatureTemplate(entry);
+  const templateCache = new Map<number, Row | undefined>();
+  const template = (e: number) => { if (!templateCache.has(e)) templateCache.set(e, vm.creatureTemplate(e)); return templateCache.get(e); };
+
+  for (const [zoneId, a] of acc) {
+    const name = areaName.get(zoneId) ?? `Zone ${zoneId}`;
+    const zone: ZoneDef = {
+      id: zoneId, name, map: a.map, x: a.n ? Math.round(a.sx / a.n) : 0, y: a.n ? Math.round(a.sy / a.n) : 0,
+      city: CITIES.has(zoneId), levelMin: 0, levelMax: 0, creatures: [], nodes: [], fishing: null, vendorItems: [], taxiNodes: [],
+    };
+    const levels: number[] = [];
+    const vendorSeen = new Set<number>();
+    for (const [entry, spawns] of a.creatures) {
+      const t = template(entry);
       if (!t) continue;
       const npcFlags = Number(t.npc_flags);
-      if (npcFlags & NPC_FLAG_VENDOR) (vendorsByZone.get(zoneId) ?? vendorsByZone.set(zoneId, new Set()).get(zoneId)!).add(entry);
+      if (npcFlags & NPC_FLAG_VENDOR) addVendor(zone, t, vm, items, vendorSeen, traders(Number(t.faction)));
       const type = Number(t.type);
-      if (npcFlags || type === CREATURE_TYPE_CRITTER || type === CREATURE_TYPE_NOT_SPECIFIED || !attackableFT.has(Number(t.faction))) continue;
-      const def = creatureDef(t, classStats, vm, items);
+      if (npcFlags || type === CREATURE_TYPE_CRITTER || type === CREATURE_TYPE_NOT_SPECIFIED) continue;
+      const hostile = attackers(Number(t.faction));
+      if (!hostile.length) continue;
+      const def = creatures[entry] ?? creatureDef(t, classStats, vm, items, hostile);
       if (!def || (!def.loot && !def.goldMax)) continue; // nothing to farm (pets, scripted dummies)
       creatures[entry] = def;
       zone.creatures.push({ id: entry, spawns });
-      zone.levelMin = Math.min(zone.levelMin, def.levelMin);
-      zone.levelMax = Math.max(zone.levelMax, def.levelMax);
+      if (def.rank === 0 && hostile.length === 2) for (let i = 0; i < spawns; i++) levels.push((def.levelMin + def.levelMax) / 2);
     }
-    zone.creatures.sort((a, b) => creatures[a.id].levelMin - creatures[b.id].levelMin || b.spawns - a.spawns);
-    zones.push(zone);
-  }
+    zone.creatures.sort((x, y) => creatures[x.id].levelMin - creatures[y.id].levelMin || y.spawns - x.spawns);
 
-  // ---- gathering nodes
-  const nodes: Record<number, NodeDef> = {};
-  for (const zone of zones) {
-    for (const [entry, spawns] of goSpawns.get(zone.id) ?? []) {
+    for (const [entry, spawns] of a.objects) {
       const t = vm.gameobjectTemplate(entry);
       if (!t || Number(t.type) !== GO_TYPE_CHEST) continue;
       const req = lockReq.get(Number(t.data0));
@@ -128,32 +161,67 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
       nodes[entry] = { id: entry, name: String(t.name), skill: req.skill, reqSkill: req.req, displayId: Number(t.displayId), loot };
       zone.nodes.push({ id: entry, spawns });
     }
-    zone.nodes.sort((a, b) => nodes[a.id].reqSkill - nodes[b.id].reqSkill);
+    zone.nodes.sort((x, y) => nodes[x.id].reqSkill - nodes[y.id].reqSkill);
 
-    // ---- fishing: zone-level loot, catch difficulty from skill_fishing_base_level
-    const fishLoot = vm.loot('fishing_loot_template', zone.id, items);
-    const base = vm.get(`SELECT skill FROM skill_fishing_base_level WHERE entry=?`, zone.id);
-    if (fishLoot) zone.fishing = { zoneSkill: Number(base?.skill ?? 0), loot: fishLoot };
-
-    // ---- vendors in the zone
-    const seen = new Set<number>();
-    for (const v of vendorsByZone.get(zone.id) ?? []) {
-      const t = vm.creatureTemplate(v);
-      const rows = [
-        ...vm.all(`SELECT item FROM npc_vendor WHERE entry=?`, v),
-        ...(Number(t?.vendor_id) ? vm.all(`SELECT item FROM npc_vendor_template WHERE entry=?`, Number(t!.vendor_id)) : []),
-      ];
-      for (const r of rows) {
-        const id = Number(r.item);
-        if (seen.has(id) || !vm.itemTemplate(id)) continue;
-        seen.add(id); items.add(id);
-        zone.vendorItems.push({ item: id, vendor: String(t?.name ?? '') });
-      }
+    const fishLoot = vm.loot('fishing_loot_template', zoneId, items);
+    if (fishLoot) {
+      const base = vm.get(`SELECT skill FROM skill_fishing_base_level WHERE entry=?`, zoneId);
+      zone.fishing = { zoneSkill: Number(base?.skill ?? 0), loot: fishLoot };
     }
+
+    // Level range: the client's own figure where it has one, else the middle 80% of wild spawns.
+    const adv = lfgRange.get(name.toLowerCase()) ?? lfgRange.get(name.replace(/ Forest$/, '').toLowerCase());
+    levels.sort((x, y) => x - y);
+    const pct = (p: number) => levels.length ? Math.round(levels[Math.min(levels.length - 1, Math.floor(levels.length * p))]) : 0;
+    // (The client has a few typos, e.g. Felwood "46-6"; fall back to the spawns when a range makes no sense.)
+    [zone.levelMin, zone.levelMax] = adv && adv[1] >= adv[0] ? [adv[0], Math.min(60, adv[1])] : [pct(0.1), pct(0.9)];
+
+    const playable = zone.creatures.length >= 3 || zone.nodes.length > 0 || zone.city;
+    if (playable) zones.push(zone);
   }
+  zones.sort((x, y) => x.map - y.map || x.levelMin - y.levelMin || x.name.localeCompare(y.name));
+  log(`zones: ${zones.length}, creatures: ${Object.keys(creatures).length}, nodes: ${Object.keys(nodes).length}`);
+
+  // ---- flight paths
+  const tn = client.dbc('TaxiNodes'); // 0 id, 1 map, 2 x, 3 y, 5 name, 14 horde mount, 15 alliance mount
+  const taxiNodes: Record<number, TaxiNode> = {};
+  for (const r of tn.rows()) {
+    const factions: Faction[] = [];
+    if (tn.u32(r, 15)) factions.push('alliance');
+    if (tn.u32(r, 14)) factions.push('horde');
+    const map = tn.u32(r, 1);
+    if (!factions.length || map > 1) continue; // boats/zeppelins and other maps
+    const x = tn.f32(r, 2), y = tn.f32(r, 3);
+    const zone = zl.zoneAt(map, x, y);
+    const id = tn.u32(r, 0);
+    taxiNodes[id] = { id, name: tn.str(r, 5), map, x: Math.round(x), y: Math.round(y), zone, factions };
+    zones.find(z => z.id === zone)?.taxiNodes.push(id);
+  }
+  const tpn = client.dbc('TaxiPathNode'); // 1 path, 2 index, 3 map, 4 x, 5 y
+  const pathPts = new Map<number, [number, number, number][]>();
+  for (const r of tpn.rows()) (pathPts.get(tpn.u32(r, 1)) ?? pathPts.set(tpn.u32(r, 1), []).get(tpn.u32(r, 1))!).push([tpn.u32(r, 2), tpn.f32(r, 4), tpn.f32(r, 5)]);
+  const tp = client.dbc('TaxiPath'); // 0 id, 1 from, 2 to, 3 cost
+  const taxiPaths: TaxiPath[] = [];
+  for (const r of tp.rows()) {
+    const from = tp.u32(r, 1), to = tp.u32(r, 2);
+    if (!taxiNodes[from] || !taxiNodes[to]) continue;
+    const pts = (pathPts.get(tp.u32(r, 0)) ?? []).sort((p, q) => p[0] - q[0]);
+    let length = 0;
+    for (let i = 1; i < pts.length; i++) length += Math.hypot(pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]);
+    if (!length) length = Math.hypot(taxiNodes[from].x - taxiNodes[to].x, taxiNodes[from].y - taxiNodes[to].y);
+    taxiPaths.push({ from, to, cost: tp.u32(r, 3), length: Math.round(length) });
+  }
+  // Nodes no route touches are leftovers the game never used (e.g. "Northshire Abbey").
+  const routed = new Set(taxiPaths.flatMap(p => [p.from, p.to]));
+  for (const id of Object.keys(taxiNodes).map(Number)) {
+    if (routed.has(id)) continue;
+    delete taxiNodes[id];
+    for (const z of zones) z.taxiNodes = z.taxiNodes.filter(n => n !== id);
+  }
+  log(`flight paths: ${Object.keys(taxiNodes).length} nodes, ${taxiPaths.length} routes`);
 
   // ---- cooking recipes: thresholds from SkillLineAbility.dbc, reagents/products from spell data
-  const sla = client.dbc('SkillLineAbility'); // 1 skill, 2 spell, 7 minRank, 10 grey (trivial high), 11 yellow (trivial low)
+  const sla = client.dbc('SkillLineAbility'); // 1 skill, 2 spell, 7 minRank, 9 acquire, 10 grey (trivial high), 11 yellow (trivial low)
   const obtainable = new Set(items);
   const recipes: Record<number, RecipeDef> = {};
   for (const r of sla.rows()) {
@@ -163,7 +231,7 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
     if (!s || Number(s.effect1) !== 24 || !Number(s.effectItemType1)) continue; // SPELL_EFFECT_CREATE_ITEM
     const reagents: [number, number][] = [];
     for (let i = 1; i <= 8; i++) if (Number(s[`reagent${i}`])) reagents.push([Number(s[`reagent${i}`]), Number(s[`reagentCount${i}`])]);
-    if (!reagents.every(([id]) => obtainable.has(id))) continue; // only what this zone set can supply
+    if (!reagents.every(([id]) => obtainable.has(id))) continue; // only what the world can supply
     const learnedWithSkill = sla.u32(r, 9) === SLA_LEARNED_WITH_SKILL;
     const trainer = learnedWithSkill ? { cost: 0, reqSkill: sla.u32(r, 7), reqLevel: 0 } : vm.trainerOffer(spellId);
     const recipeItem = vm.recipeItem(spellId);
@@ -187,9 +255,8 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
   // ---- items
   const itemDefs: Record<number, ItemDef> = {};
   for (const id of items) {
-    const t = vm.itemTemplate(id);
-    if (!t) continue;
-    itemDefs[id] = itemDef(t, icons, vm, durations);
+    const t = vm.cachedItem(id);
+    if (t) itemDefs[id] = itemDef(t, icons, vm, durations);
   }
 
   // ---- player tables
@@ -197,6 +264,9 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
   for (const r of vm.all(`SELECT * FROM player_xp_for_level ORDER BY lvl`)) xpToNext[Number(r.lvl)] = Number(r.xp_for_next_level);
   const races = client.dbc('ChrRaces'), classes = client.dbc('ChrClasses');
   const raceList = races.rows().map(r => ({ id: races.u32(r, 0), name: races.str(r, 17) }));
+  const cbi = client.dbc('CharBaseInfo'); // packed: byte 0 race, byte 1 class
+  const raceClasses: Record<number, number[]> = {};
+  for (const r of cbi.rows()) (raceClasses[cbi.u8(r, 0)] ??= []).push(cbi.u8(r, 1));
   const levelStats: GameData['levelStats'] = {};
   for (const r of vm.all(`SELECT * FROM player_levelstats ORDER BY race, class, level`)) {
     const race = Number(r.race), cls = Number(r.class);
@@ -216,23 +286,45 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
     });
   }
 
+  // Keep only loot tables something can still reach.
+  const loot = vm.tables;
   vm.close();
+  const startZones: Record<number, number> = {};
+  for (const [race, zone] of Object.entries(START_ZONES)) if (zones.some(z => z.id === zone)) startZones[+race] = zone;
   const data: GameData = {
-    version: 1, builtAt: new Date().toISOString(), build: 5875,
+    version: 2, builtAt: new Date().toISOString(), build: 5875,
     xpToNext, maxLevel: 60,
     races: raceList.filter(r => [1, 2, 3, 4, 5, 6, 7, 8].includes(r.id))
       .map(r => ({ ...r, faction: [1, 3, 4, 7].includes(r.id) ? 'alliance' as const : 'horde' as const })),
     classes: classes.rows().map(r => ({ id: classes.u32(r, 0), name: classes.str(r, 5) })),
+    raceClasses, startZones,
     levelStats, classStats: classStatsOut, skillRanks,
-    zones, creatures, items: itemDefs, nodes, recipes,
+    zones, creatures, items: itemDefs, nodes, recipes, loot, taxiNodes, taxiPaths,
   };
   const out = path.join(opts.cacheDir, 'data');
   fs.mkdirSync(out, { recursive: true });
-  fs.writeFileSync(path.join(out, 'game.json'), JSON.stringify(data));
+  const json = JSON.stringify(data);
+  fs.writeFileSync(path.join(out, 'game.json'), json);
+  log(`game.json: ${(json.length / 1024 / 1024).toFixed(1)} MB, ${Object.keys(itemDefs).length} items, ${Object.keys(loot).length} loot tables (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
   return data;
 }
 
-function creatureDef(t: Row, classStats: Map<string, Row>, vm: VMangos, items: Set<number>): CreatureDef | null {
+function addVendor(zone: ZoneDef, t: Row, vm: VMangos, items: Set<number>, seen: Set<number>, factions: Faction[]): void {
+  if (!factions.length) return;
+  const rows = [
+    ...vm.all(`SELECT item FROM npc_vendor WHERE entry=?`, Number(t.entry)),
+    ...(Number(t.vendor_id) ? vm.all(`SELECT item FROM npc_vendor_template WHERE entry=?`, Number(t.vendor_id)) : []),
+  ];
+  for (const r of rows) {
+    const id = Number(r.item);
+    const key = id * 4 + (factions.includes('alliance') ? 1 : 0) + (factions.includes('horde') ? 2 : 0);
+    if (seen.has(key) || !vm.cachedItem(id)) continue;
+    seen.add(key); items.add(id);
+    zone.vendorItems.push({ item: id, vendor: String(t.name ?? ''), factions });
+  }
+}
+
+function creatureDef(t: Row, classStats: Map<string, Row>, vm: VMangos, items: Set<number>, hostile: Faction[]): CreatureDef | null {
   const levelMin = Number(t.level_min), levelMax = Number(t.level_max);
   const stats: CreatureDef['stats'] = [];
   const attackMs = Number(t.base_attack_time) || 2000;
@@ -255,6 +347,7 @@ function creatureDef(t: Row, classStats: Map<string, Row>, vm: VMangos, items: S
     levelMin, levelMax, rank: Number(t.rank), type: Number(t.type), displayIds, attackMs, stats,
     goldMin: Number(t.gold_min), goldMax: Number(t.gold_max),
     loot: vm.loot('creature_loot_template', Number(t.loot_id), items),
+    hostile,
   };
 }
 

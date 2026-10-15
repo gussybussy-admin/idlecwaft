@@ -1,7 +1,7 @@
 // The authoritative world: every character's sim state, the guild, chat and the activity feed.
 // Transport-independent (the network layer subscribes to it) and driven by an injectable clock.
 import {
-  addItem, advance, applyCommand, emptySummary, hasItem, newGame, OFFLINE_CAP_MS, summarize,
+  addItem, advance, applyCommand, emptySummary, hasItem, migrateState, newGame, OFFLINE_CAP_MS, summarize,
   type Appearance, type BankLogEntry, type ChatMessage, type Command, type CommandResult, type FeedItem,
   type GameData, type GameState, type GuildRequest, type GuildSnapshot, type RosterEntry, type SimEvent, type Summary,
 } from '@idle/sim';
@@ -13,7 +13,6 @@ const AWAY_REPORT_MIN_MS = 60_000;
 const KILL_FEED_WINDOW_MS = 30 * 60_000;
 const CHAT_MAX = 300, CHAT_BURST = 5, CHAT_WINDOW_MS = 10_000;
 const MAX_OPEN_REQUESTS = 10;
-const ALLIANCE_COMBOS: Record<number, number[]> = { 1: [1, 2, 4, 5, 8, 9], 3: [1, 2, 3, 4, 5], 4: [1, 3, 4, 5, 11], 7: [1, 4, 8, 9] };
 
 interface Char {
   accountId: number;
@@ -47,7 +46,7 @@ export class World {
     for (const r of db.prepare(`SELECT account_id, name, state, last_seen, away FROM characters`).all() as
       { account_id: number; name: string; state: string; last_seen: number; away: string | null }[]) {
       this.chars.set(r.account_id, {
-        accountId: r.account_id, name: r.name, state: JSON.parse(r.state), lastSeen: r.last_seen, online: 0,
+        accountId: r.account_id, name: r.name, state: migrateState(JSON.parse(r.state)), lastSeen: r.last_seen, online: 0,
         away: r.away ? JSON.parse(r.away) : null, dirty: false, chatTimes: [], lastKillFeed: new Map(),
       });
     }
@@ -145,7 +144,7 @@ export class World {
     if (typeof name !== 'string' || !/^[A-Za-z]{2,12}$/.test(name)) return fail('Names are 2-12 letters.');
     const proper = name[0].toUpperCase() + name.slice(1).toLowerCase();
     if (this.db.prepare(`SELECT 1 FROM characters WHERE name = ?`).get(proper)) return fail('That name is taken.');
-    if (!isInt(race, 1, 8) || !isInt(cls, 1, 11) || !ALLIANCE_COMBOS[race]?.includes(cls)) return fail('Invalid race/class.');
+    if (!isInt(race, 1, 8) || !isInt(cls, 1, 11) || !this.data.raceClasses[race]?.includes(cls)) return fail('Invalid race/class.');
     const now = this.clock();
     const cleanLook = look && [look.sex, look.skin, look.face, look.hairStyle, look.hairColor, look.facialHair].every(v => isInt(v, 0, 64)) && look.sex <= 1
       ? { sex: look.sex, skin: look.skin, face: look.face, hairStyle: look.hairStyle, hairColor: look.hairColor, facialHair: look.facialHair } : undefined;
@@ -366,6 +365,7 @@ export function activityText(s: GameState, data: GameData): string {
     case 'gather': { const n = data.nodes[a.node]; return n ? `${n.skill === 'mining' ? 'Mining' : 'Gathering'} ${n.name}` : 'Gathering'; }
     case 'fish': return 'Fishing';
     case 'cook': return `Cooking ${data.recipes[a.recipe]?.name ?? ''}`.trim();
+    case 'travel': return `Travelling to ${data.zones.find(z => z.id === a.to)?.name ?? 'somewhere'}`;
   }
 }
 

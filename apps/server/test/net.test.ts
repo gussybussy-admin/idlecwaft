@@ -69,7 +69,7 @@ describe('game server over the network', () => {
     expect(st.state.char.name).toBe('Alice');
 
     const cb = await client(b.token);
-    cb.send({ t: 'create', name: 'bobby', race: 3, cls: 1 });
+    cb.send({ t: 'create', name: 'bobby', race: 2, cls: 1 }); // a Horde player in the same guild
     await cb.wait('hello');
 
     // a server-validated command

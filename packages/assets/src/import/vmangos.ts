@@ -2,7 +2,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { LootEntry, LootTable } from '@idle/sim';
+import type { LootEntry, LootRef, LootTable } from '@idle/sim';
 
 export const PATCH_1_12 = 10;
 
@@ -10,7 +10,7 @@ export type Row = Record<string, number | string | null>;
 
 export class VMangos {
   readonly db: Database.Database;
-  private lootCache = new Map<string, LootTable | null>();
+  private lootCache = new Map<LootRef, LootTable | null>();
 
   constructor(file: string) {
     if (!fs.existsSync(file)) throw new Error(`VMaNGOS world DB not found: ${file}`);
@@ -79,49 +79,71 @@ export class VMangos {
     return new Set(this.all(`SELECT guid FROM game_event_gameobject`).map(r => Number(r.guid)));
   }
 
+  /** Every loot table built so far, by key (`creature:12`, `ref:24001`, ...): becomes GameData.loot. */
+  readonly tables: Record<LootRef, LootTable> = {};
+  private itemCache = new Map<number, Row | undefined>();
+
+  cachedItem(entry: number): Row | undefined {
+    if (!this.itemCache.has(entry)) this.itemCache.set(entry, this.itemTemplate(entry));
+    return this.itemCache.get(entry);
+  }
+
   /**
-   * Builds a loot table, resolving reference tables recursively. Quest-only drops (negative chance)
-   * are skipped until quests exist. Every item id seen is added to `items`.
+   * Builds a loot table (and every reference table it uses) into `tables`, returning its key.
+   * Quest-only drops (negative chance in MaNGOS) are kept with `quest: true`. Every item id seen is
+   * added to `items`.
    */
-  loot(table: string, entry: number, items: Set<number>, depth = 0): LootTable | null {
-    const key = `${table}:${entry}`;
+  loot(table: string, entry: number, items: Set<number>, depth = 0): LootRef | null {
+    const prefix = LOOT_PREFIX[table] ?? table;
+    const key = `${prefix}:${entry}`;
     if (this.lootCache.has(key)) {
-      const t = this.lootCache.get(key)!;
-      if (t) collectItems(t, items);
-      return t;
+      const t = this.lootCache.get(key);
+      if (t) collectItems(this.tables, key, items);
+      return t ? key : null;
     }
     if (!entry || depth > 6) return null;
+    this.lootCache.set(key, null); // guards against reference cycles while building
     const rows = this.all(`SELECT * FROM ${table} WHERE entry=? AND patch_min<=? AND patch_max>=?`, entry, PATCH_1_12, PATCH_1_12);
     const out: LootTable = { entries: [], groups: [] };
     const groups = new Map<number, LootEntry[]>();
     for (const r of rows) {
-      const chance = Number(r.ChanceOrQuestChance), group = Number(r.groupid);
+      const raw = Number(r.ChanceOrQuestChance), group = Number(r.groupid);
       const minOrRef = Number(r.mincountOrRef), max = Number(r.maxcount);
-      if (chance < 0) continue; // quest item
       let e: LootEntry;
       if (minOrRef < 0) {
         const ref = this.loot('reference_loot_template', -minOrRef, items, depth + 1);
         if (!ref) continue;
-        e = { ref, chance, times: Math.max(1, max) };
+        e = { ref, chance: Math.abs(raw), times: Math.max(1, max) };
       } else {
-        if (!this.itemTemplate(Number(r.item))) continue;
+        if (!this.cachedItem(Number(r.item))) continue;
         items.add(Number(r.item));
-        e = { item: Number(r.item), chance, min: Math.max(1, minOrRef), max: Math.max(1, max, minOrRef) };
+        e = { item: Number(r.item), chance: Math.abs(raw), min: Math.max(1, minOrRef), max: Math.max(1, max, minOrRef) };
+        if (raw < 0) e.quest = true;
       }
       if (group) { if (!groups.has(group)) groups.set(group, []); groups.get(group)!.push(e); }
       else out.entries.push(e);
     }
     out.groups = [...groups.values()];
-    const result = out.entries.length || out.groups.length ? out : null;
-    this.lootCache.set(key, result);
-    return result;
+    const ok = out.entries.length > 0 || out.groups.length > 0;
+    this.lootCache.set(key, ok ? out : null);
+    if (ok) this.tables[key] = out;
+    return ok ? key : null;
   }
 
   close(): void { this.db.close(); }
 }
 
-function collectItems(t: LootTable, items: Set<number>): void {
+const LOOT_PREFIX: Record<string, string> = {
+  creature_loot_template: 'creature', reference_loot_template: 'ref', gameobject_loot_template: 'go',
+  fishing_loot_template: 'fish', skinning_loot_template: 'skin', pickpocketing_loot_template: 'pick',
+  item_loot_template: 'item', disenchant_loot_template: 'de',
+};
+
+function collectItems(tables: Record<LootRef, LootTable>, key: LootRef, items: Set<number>, seen = new Set<string>()): void {
+  const t = tables[key];
+  if (!t || seen.has(key)) return;
+  seen.add(key);
   for (const e of [...t.entries, ...t.groups.flat()]) {
-    if ('item' in e) items.add(e.item); else collectItems(e.ref, items);
+    if ('item' in e) items.add(e.item); else collectItems(tables, e.ref, items, seen);
   }
 }

@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import type { GameData } from '@idle/sim';
 import { Client } from '../../../packages/assets/src/client.js';
 import { convertArt } from '../../../packages/assets/src/convert/art.js';
+import { LazyArt } from '../../../packages/assets/src/convert/lazy.js';
 import { CLIENT_FILES } from './client-files.js';
 
 // When packaged, process.execPath is the launcher .exe; from source it's node itself.
@@ -89,7 +90,7 @@ async function setup(prev?: Partial<Config>): Promise<Config> {
 
 async function ensureArt(cfg: Config, dataVersion: string): Promise<void> {
   const have = fs.existsSync(versionFile) ? fs.readFileSync(versionFile, 'utf8').trim() : '';
-  if (have === dataVersion && fs.existsSync(path.join(cacheDir, 'creatures/index.json'))) {
+  if (have === dataVersion && fs.existsSync(path.join(cacheDir, 'character/index.json'))) {
     say('Art is up to date.');
     return;
   }
@@ -119,17 +120,14 @@ function clientFile(rel: string): Buffer | null {
   return file.startsWith(path.resolve('apps/game/dist')) && fs.existsSync(file) && fs.statSync(file).isFile() ? fs.readFileSync(file) : null;
 }
 
-function serve(): Promise<number> {
+function serve(art: LazyArt): Promise<number> {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     let rel = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html';
     if (rel.includes('..')) { res.writeHead(400); res.end(); return; }
     const type = TYPES[path.extname(rel).toLowerCase()] ?? 'application/octet-stream';
-    let body = clientFile(rel);
-    if (!body) {
-      const file = path.join(cacheDir, rel);
-      if (file.startsWith(cacheDir) && fs.existsSync(file) && fs.statSync(file).isFile()) body = fs.readFileSync(file);
-    }
+    // Our client build first, then the player's cache (creature models and icons convert on first use).
+    let body = clientFile(rel) ?? art.get(rel);
     if (!body && !path.extname(rel)) { body = clientFile('index.html'); rel = 'index.html'; }
     if (!body) { res.writeHead(404); res.end('not found'); return; }
     res.writeHead(200, { 'content-type': rel === 'index.html' ? TYPES['.html'] : type, 'cache-control': rel === 'index.html' ? 'no-cache' : 'max-age=3600' });
@@ -169,7 +167,7 @@ async function main(): Promise<void> {
   say(`Guild server: ${cfg.server}`);
   await ensureArt(cfg, h.dataVersion);
 
-  const port = await serve();
+  const port = await serve(new LazyArt(new Client(cfg.clientPath), cacheDir));
   const url = `http://localhost:${port}/?server=${encodeURIComponent(cfg.server)}`;
   say();
   say(`Game running at ${url}`);

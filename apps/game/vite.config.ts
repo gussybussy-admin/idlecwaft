@@ -34,11 +34,37 @@ function devScreenshots(): Plugin {
   };
 }
 
+/**
+ * Dev-only: creature models and item icons that aren't in the cache yet are converted from the local
+ * client on first request (the launcher does the same for players).
+ */
+function lazyArt(): Plugin {
+  return {
+    name: 'lazy-art',
+    apply: 'serve',
+    async configureServer(server) {
+      const { loadConfig } = await import('../../packages/assets/src/config.js');
+      const { Client } = await import('../../packages/assets/src/client.js');
+      const { LazyArt } = await import('../../packages/assets/src/convert/lazy.js');
+      let art: InstanceType<typeof LazyArt> | null = null;
+      server.middlewares.use((req, res, next) => {
+        const rel = decodeURIComponent((req.url ?? '').split('?')[0]).replace(/^\/+/, '');
+        if (!/^(icons\/[\w-]+\.png|creatures\/\d+\.(json|glb))$/i.test(rel) || fs.existsSync(path.join(cacheDir, rel))) return next();
+        try { art ??= new LazyArt(new Client(loadConfig().clientPath), cacheDir); } catch { return next(); }
+        const body = art.get(rel);
+        if (!body) { res.statusCode = 404; res.end(); return; }
+        res.setHeader('content-type', rel.endsWith('.png') ? 'image/png' : rel.endsWith('.json') ? 'application/json' : 'model/gltf-binary');
+        res.end(body);
+      });
+    },
+  };
+}
+
 // The dev server serves converted art from the player's local, gitignored cache. Production builds
 // (used by the launcher) get NO public dir, so no cache file can ever end up in dist/: the launcher
 // serves each player's own cache next to the build at runtime.
 export default defineConfig(({ command }) => ({
-  plugins: [react(), devScreenshots()],
+  plugins: [react(), devScreenshots(), lazyArt()],
   publicDir: command === 'serve' ? cacheDir : false,
   server: { port: 5174, strictPort: true },
   build: { outDir: 'dist', emptyOutDir: true, chunkSizeWarningLimit: 2000 },

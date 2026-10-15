@@ -2,6 +2,8 @@
 // one discrete event at a time, using only the RNG stored in the state: same state + same target
 // time = same result, which is what lets the server simulate and clients replay.
 import type { CreatureDef, GameData, ItemDef } from './data.js';
+import { factionOfRace } from './data.js';
+import { discoverTaxis, planTravel, RIDING } from './travel.js';
 import {
   armorReduction, fishingCatchChance, fishingSkillupChance, gatherColor, healthFromStamina,
   healthRegenPerSec, killXp, meleeAttackPower, missChance, recipeColor, SKILLUP_CHANCE, STAT,
@@ -15,6 +17,7 @@ import {
 export const OFFLINE_CAP_MS = 24 * 60 * 60 * 1000;
 export const SEARCH_MS: [number, number] = [2500, 4500]; // finding the next mob
 export const DEATH_MS = 30_000;                          // corpse run
+export const REVIVE_HP_FRACTION = 0.1;                   // health after resurrecting at your corpse
 export const GATHER_MS = 5000;                           // walk to the node + gather cast
 export const FISH_MS: [number, number] = [5000, 18000];  // bobber wait
 export const CRAFT_PAD_MS = 500;                         // between crafts
@@ -32,7 +35,8 @@ export type SimEvent =
   | { t: number; type: 'harvest'; skill: Profession; items: [number, number][] }
   | { t: number; type: 'escape' } // a fish got away
   | { t: number; type: 'eat'; item: number }
-  | { t: number; type: 'stop'; reason: string };
+  | { t: number; type: 'stop'; reason: string }
+  | { t: number; type: 'arrive'; zone: number };
 
 export interface Summary {
   ms: number; xp: number; gold: number; kills: number; deaths: number; levels: number;
@@ -138,11 +142,15 @@ function nextEventAt(s: GameState, data: GameData): number | null {
       if (s.char.hp >= st.maxHp) return s.now;
       const eat = ph.eating;
       if (eat && eat.until <= s.now) return s.now; // finished eating: decide whether to eat again
-      // Walk regen ticks until full or until the meal ends. Every tick heals >= 1, so this terminates.
+      if (!eat) {
+        // No food: wake on every slow-regen tick (to eat if food turned up) until the rest goal.
+        return ticksAfter(s.now, BASE_REGEN_MS);
+      }
+      // Walk food ticks until full or until the meal ends (a meal lasts seconds, so this is short).
       let hp = s.char.hp;
-      for (let tick = tickAfter(s.now); ; tick += REGEN_TICK_MS) {
-        if (eat && eat.until < tick) return eat.until;
-        hp += regenPerTick(st) + (eat ? eat.perTick : 0);
+      for (let tick = ticksAfter(s.now, REGEN_TICK_MS); ; tick += REGEN_TICK_MS) {
+        if (eat.until < tick) return eat.until;
+        hp += eat.perTick + (tick % BASE_REGEN_MS === 0 ? 1 : 0);
         if (hp >= st.maxHp) return tick;
       }
     }
@@ -150,23 +158,22 @@ function nextEventAt(s: GameState, data: GameData): number | null {
 }
 
 /**
- * Health regenerates in whole points on 2-second ticks aligned to absolute time, while not in
- * combat and not dead. Aligned integer ticks make the result independent of how time is chunked.
+ * Healing outside combat is food. Natural regeneration is only 1 HP per minute, so fishing and cooking
+ * are what keep a fighter going. Both kinds of tick are aligned to absolute time and heal whole
+ * points, which keeps the result independent of how time is chunked.
  */
-export const REGEN_TICK_MS = 2000;
-const tickAfter = (t: number) => (Math.floor(t / REGEN_TICK_MS) + 1) * REGEN_TICK_MS;
-const ticksBetween = (from: number, to: number) => Math.max(0, Math.floor(to / REGEN_TICK_MS) - Math.floor(from / REGEN_TICK_MS));
-const regenPerTick = (st: PlayerStats) => Math.max(1, Math.round(st.regenPerSec * REGEN_TICK_MS / 1000));
+export const REGEN_TICK_MS = 2000;       // food heals on these ticks
+export const BASE_REGEN_MS = 60_000;     // 1 HP of natural regeneration per tick
+const ticksAfter = (t: number, period: number) => (Math.floor(t / period) + 1) * period;
+const ticksBetween = (from: number, to: number, period: number) => Math.max(0, Math.floor(to / period) - Math.floor(from / period));
 
 function regen(s: GameState, data: GameData, to: number): void {
   const ph = s.phase;
   if (to <= s.now || ph.p === 'combat' || ph.p === 'dead') return;
-  const ticks = ticksBetween(s.now, to);
-  if (!ticks) return;
-  const st = playerStats(s, data);
-  let gain = ticks * regenPerTick(st);
-  if (ph.p === 'rest' && ph.eating) gain += ticksBetween(s.now, Math.min(to, ph.eating.until)) * ph.eating.perTick;
-  s.char.hp = Math.min(st.maxHp, s.char.hp + gain);
+  let gain = ticksBetween(s.now, to, BASE_REGEN_MS);
+  if (ph.p === 'rest' && ph.eating) gain += ticksBetween(s.now, Math.min(to, ph.eating.until), REGEN_TICK_MS) * ph.eating.perTick;
+  if (!gain) return;
+  s.char.hp = Math.min(playerStats(s, data).maxHp, s.char.hp + gain);
 }
 
 function step(s: GameState, data: GameData, emit: Emit): void {
@@ -177,6 +184,7 @@ function step(s: GameState, data: GameData, emit: Emit): void {
     case 'gather': return stepGather(s, data, a.node, emit);
     case 'fish': return stepFish(s, data, emit);
     case 'cook': return stepCook(s, data, a.recipe, emit);
+    case 'travel': return stepTravel(s, data, a.to, emit);
   }
 }
 
@@ -209,17 +217,23 @@ function stepFight(s: GameState, data: GameData, creatureId: number, emit: Emit)
     return;
   }
   if (ph.p === 'dead') {
-    s.char.hp = Math.ceil(st.maxHp * 0.5);
+    // Resurrecting is not a heal: you come back weak and need food (or a long rest).
+    s.char.hp = Math.max(1, Math.ceil(st.maxHp * REVIVE_HP_FRACTION));
     log(s, 'info', 'You return to your corpse and resurrect.');
     emit({ t: s.now, type: 'revive' });
     return startRest(s, data, emit);
   }
   if (ph.p === 'rest') {
+    const goal = st.maxHp * s.settings.restBelowPct / 100;
     if (s.char.hp >= st.maxHp) {
       s.phase = { p: 'search', from: s.now, until: s.now + int(s.rng, ...SEARCH_MS) };
-    } else if (ph.eating && s.now >= ph.eating.until) {
-      ph.eating = undefined; // finished eating; keep resting on base regen (or eat again)
+      return;
+    }
+    if (ph.eating && s.now >= ph.eating.until) ph.eating = undefined; // finished eating: eat again if still hurt
+    if (!ph.eating) {
       maybeEat(s, data, emit);
+      // Without food you only wait until you're fit enough to fight again.
+      if (!ph.eating && s.char.hp >= goal) s.phase = { p: 'search', from: s.now, until: s.now + int(s.rng, ...SEARCH_MS) };
     }
     return;
   }
@@ -275,7 +289,7 @@ function stepFight(s: GameState, data: GameData, creatureId: number, emit: Emit)
 function onKill(s: GameState, data: GameData, def: CreatureDef, mob: Mob, emit: Emit): void {
   const xp = s.char.level < data.maxLevel ? killXp(s.char.level, mob.level, def.rank) : 0;
   const gold = def.goldMax ? int(s.rng, def.goldMin, def.goldMax) : 0;
-  const drops = rollLoot(def.loot, s.rng);
+  const drops = rollLoot(data, def.loot, s.rng);
   s.gold += gold;
   for (const [i, n] of drops) addItem(s, i, n);
   s.stats.kills[def.id] = (s.stats.kills[def.id] ?? 0) + 1;
@@ -311,8 +325,8 @@ function maybeEat(s: GameState, data: GameData, emit: Emit): void {
   const ph = s.phase;
   if (ph.p !== 'rest' || ph.eating || !s.settings.autoEat) return;
   const st = playerStats(s, data);
-  if (s.char.hp >= st.maxHp * s.settings.eatBelowPct / 100) return;
   const missing = st.maxHp - s.char.hp;
+  if (missing <= 0) return;
   const foods = Object.keys(s.inventory).map(Number).map(id => data.items[id])
     .filter((it): it is ItemDef => !!it?.food?.heal && it.reqLevel <= s.char.level)
     .sort((a, b) => a.food!.heal - b.food!.heal);
@@ -343,7 +357,7 @@ function stepGather(s: GameState, data: GameData, nodeId: number, emit: Emit): v
     s.phase = { p: 'work', from: s.now, until: s.now + GATHER_MS };
     return;
   }
-  const drops = rollLoot(node.loot, s.rng);
+  const drops = rollLoot(data, node.loot, s.rng);
   for (const [i, n] of drops) addItem(s, i, n);
   s.stats.gathered++;
   emit({ t: s.now, type: 'harvest', skill: node.skill, items: [...drops] });
@@ -361,7 +375,7 @@ function stepFish(s: GameState, data: GameData, emit: Emit): void {
   }
   const skill = s.skills.fishing.level;
   if (zone?.fishing && chance(s.rng, fishingCatchChance(skill, zone.fishing.zoneSkill))) {
-    const drops = rollLoot(zone.fishing.loot, s.rng);
+    const drops = rollLoot(data, zone.fishing.loot, s.rng);
     for (const [i, n] of drops) addItem(s, i, n);
     s.stats.caught++;
     emit({ t: s.now, type: 'harvest', skill: 'fishing', items: [...drops] });
@@ -420,7 +434,47 @@ export function canCook(s: GameState, data: GameData, recipeId: number): string 
 
 export function canFight(s: GameState, data: GameData, creatureId: number): string | null {
   if (!data.zones.find(z => z.id === s.zone)?.creatures.some(c => c.id === creatureId)) return 'That creature is not in this zone.';
+  if (!data.creatures[creatureId]?.hostile.includes(factionOfRace(data, s.char.race))) return 'You cannot attack that.';
   return null;
+}
+
+export function canTravel(s: GameState, data: GameData, to: number): string | null {
+  if (to === s.zone) return "You're already there.";
+  const plan = planTravel(s, data, to);
+  if (!plan) return 'There is no way to get there from here.';
+  if (s.gold < plan.cost) return `The flight costs ${formatMoney(plan.cost)}.`;
+  return null;
+}
+
+// ---------------------------------------------------------------- travel
+
+function stepTravel(s: GameState, data: GameData, to: number, emit: Emit): void {
+  if (s.phase.p !== 'work') {
+    const err = canTravel(s, data, to);
+    if (err) return stop(s, err, emit);
+    const plan = planTravel(s, data, to)!;
+    s.gold -= plan.cost;
+    s.phase = { p: 'work', from: s.now, until: s.now + Math.max(1000, plan.ms) };
+    return;
+  }
+  s.zone = to;
+  const zone = data.zones.find(z => z.id === to);
+  log(s, 'info', `You arrive in ${zone?.name ?? 'a new zone'}.`);
+  emit({ t: s.now, type: 'arrive', zone: to });
+  discoverTaxis(s, data);
+  s.action = null;
+  s.phase = { p: 'idle' };
+}
+
+export function trainRiding(s: GameState): CommandResult {
+  const next = RIDING.find(r => r.bonus > s.riding);
+  if (!next) return fail('You already ride as fast as anyone.');
+  if (s.char.level < next.reqLevel) return fail(`Requires level ${next.reqLevel}.`);
+  if (s.gold < next.cost) return fail(`${next.name} and a mount cost ${formatMoney(next.cost)}.`);
+  s.gold -= next.cost;
+  s.riding = next.bonus;
+  log(s, 'skill', `You learned ${next.name}: travel is ${next.bonus}% faster.`);
+  return ok;
 }
 
 function hasTool(s: GameState, data: GameData, tool: string): boolean {
@@ -438,16 +492,19 @@ export function startAction(s: GameState, data: GameData, action: Action): Comma
   const err = action.kind === 'fight' ? canFight(s, data, action.creature)
     : action.kind === 'gather' ? canGather(s, data, action.node)
     : action.kind === 'fish' ? canFish(s, data)
+    : action.kind === 'travel' ? canTravel(s, data, action.to)
     : canCook(s, data, action.recipe);
   if (err) return fail(err);
   if (s.phase.p === 'dead') return fail('You are dead. Wait to resurrect.');
+  if (s.action?.kind === 'travel' && s.phase.p === 'work') return fail("You're travelling. Wait until you arrive.");
   s.action = action;
-  if (s.phase.p !== 'rest') s.phase = { p: 'idle' };
+  if (s.phase.p !== 'rest' || action.kind === 'travel') s.phase = { p: 'idle' };
   return ok;
 }
 
 export function stopAction(s: GameState): CommandResult {
   if (s.phase.p === 'dead') return fail('You are dead. Wait to resurrect.');
+  if (s.action?.kind === 'travel' && s.phase.p === 'work') return fail("You're travelling. Wait until you arrive.");
   s.action = null;
   s.phase = { p: 'idle' };
   return ok;
@@ -493,7 +550,9 @@ export function learnRecipe(s: GameState, data: GameData, recipeId: number): Com
 
 export function buy(s: GameState, data: GameData, item: number, count = 1): CommandResult {
   const zone = data.zones.find(z => z.id === s.zone);
-  if (!zone?.vendorItems.some(v => v.item === item)) return fail('No vendor here sells that.');
+  const faction = factionOfRace(data, s.char.race);
+  if (!zone?.vendorItems.some(v => v.item === item && v.factions.includes(faction))) return fail('No vendor here will sell that to you.');
+  if (!Number.isInteger(count) || count < 1) return fail('Invalid amount.');
   const it = data.items[item];
   const cost = it.buyPrice * count;
   if (s.gold < cost) return fail(`Costs ${formatMoney(cost)}.`);

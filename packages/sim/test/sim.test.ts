@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, playerStats,
-  rollLoot, seedRng, sell, startAction, stopAction, train, type GameState, type SimEvent,
+  advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, planTravel, playerStats,
+  rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, type GameState, type SimEvent,
 } from '../src/index.js';
 import { fixture } from './fixture.js';
 
@@ -33,10 +33,67 @@ describe('loot', () => {
   it('picks evenly among 0-chance group entries when no explicit entry hits', () => {
     const rng = seedRng(7);
     const counts = { 3: 0, 4: 0 };
-    for (let i = 0; i < 4000; i++) for (const [item] of rollLoot(data.zones[0].fishing!.loot, rng)) counts[item as 3 | 4]++;
+    for (let i = 0; i < 4000; i++) for (const [item] of rollLoot(data, data.zones[0].fishing!.loot, rng)) counts[item as 3 | 4]++;
     expect(counts[3] + counts[4]).toBe(4000); // a group always yields exactly one entry here
     expect(counts[3] / 4000).toBeGreaterThan(0.45);
     expect(counts[3] / 4000).toBeLessThan(0.55);
+  });
+});
+
+describe('travel, flight paths and factions', () => {
+  it('walks to a new zone in minutes, discovers its flight path, and flies back faster for a fee', () => {
+    const s = fresh();
+    expect(s.zone).toBe(1);
+    expect(s.taxi).toEqual([1]); // the start zone's flight master is known
+    const walk = planTravel(s, data, 2)!;
+    expect(walk.legs.map(l => l.kind)).toEqual(['walk']);
+    expect(walk.ms).toBe(Math.round(2100 / RUN_SPEED * 1000)); // 5 minutes at run speed
+    expect(startAction(s, data, { kind: 'travel', to: 2 }).ok).toBe(true);
+    advance(s, data, T0 + walk.ms + 1000);
+    expect(s.zone).toBe(2);
+    expect(s.taxi).toEqual([1, 2]);
+    expect(s.action).toBeNull();
+    s.gold = 100;
+    const fly = planTravel(s, data, 1)!;
+    expect(fly.legs[0].kind).toBe('fly');
+    expect(fly.ms).toBeLessThan(walk.ms / 2);
+    expect(fly.cost).toBe(30);
+    startAction(s, data, { kind: 'travel', to: 1 });
+    advance(s, data, s.now + fly.ms + 1000);
+    expect(s.zone).toBe(1);
+    expect(s.gold).toBe(70);
+  });
+
+  it('riding shortens travel; there is no route to a continent without a crossing', () => {
+    const s = fresh();
+    const before = planTravel(s, data, 2)!.ms;
+    s.char.level = 12; s.gold = 100_0000;
+    expect(trainRiding(s)).toEqual({ ok: false, error: 'Requires level 40.' });
+    s.char.level = 40;
+    expect(trainRiding(s).ok).toBe(true);
+    expect(planTravel(s, data, 2)!.ms).toBe(Math.round(before / 1.6));
+    expect(startAction(s, data, { kind: 'travel', to: 3 })).toEqual({ ok: false, error: 'There is no way to get there from here.' });
+  });
+
+  it('respects faction: who you can attack and who will trade with you', () => {
+    const ally = fresh(), horde = newGame(data, { name: 'Grum', race: 2, cls: 1, seed: 1, now: T0 });
+    expect(horde.zone).toBe(2);
+    horde.zone = 1;
+    expect(startAction(ally, data, { kind: 'fight', creature: 102 })).toEqual({ ok: false, error: 'You cannot attack that.' });
+    expect(startAction(horde, data, { kind: 'fight', creature: 102 }).ok).toBe(true);
+    ally.gold = horde.gold = 1000;
+    expect(buy(ally, data, 12).ok).toBe(true);
+    expect(buy(horde, data, 12).ok).toBe(false);
+  });
+
+  it('never drops quest-only items without the quest', () => {
+    const rng = seedRng(3);
+    let tusks = 0;
+    for (let i = 0; i < 500; i++) tusks += rollLoot(data, 'creature:100', rng).get(7) ?? 0;
+    expect(tusks).toBe(0);
+    let withQuest = 0;
+    for (let i = 0; i < 500; i++) withQuest += rollLoot(data, 'creature:100', rng, new Set([7])).get(7) ?? 0;
+    expect(withQuest).toBeGreaterThan(150);
   });
 });
 
@@ -91,8 +148,26 @@ describe('offline progress', () => {
 });
 
 describe('combat', () => {
-  it('a level 1 fighter farms level 1-2 boars and levels up', () => {
+  it('food is what keeps a fighter going: natural regen is only 1 HP a minute', () => {
+    const fed = fresh(), hungry = fresh();
+    fed.inventory[5] = 200; // Test Jerky
+    for (const s of [fed, hungry]) startAction(s, data, { kind: 'fight', creature: 100 });
+    advance(fed, data, T0 + 3_600_000);
+    advance(hungry, data, T0 + 3_600_000);
+    const kills = (s: GameState) => s.stats.kills[100] ?? 0;
+    expect(kills(fed)).toBeGreaterThan(3 * kills(hungry));
+    expect(fed.inventory[5]).toBeLessThan(200);
+    // Out of combat with no food, health comes back one point per minute.
+    const idle = fresh();
+    idle.char.hp = 10;
+    advance(idle, data, idle.now + 10 * 60_000);
+    expect(idle.char.hp).toBeGreaterThanOrEqual(19);
+    expect(idle.char.hp).toBeLessThanOrEqual(20);
+  });
+
+  it('a level 1 fighter with food farms level 1-2 boars and levels up', () => {
     const s = fresh();
+    s.inventory[5] = 200;
     const events: SimEvent[] = [];
     startAction(s, data, { kind: 'fight', creature: 100 });
     advance(s, data, T0 + 3_600_000, e => events.push(e));
