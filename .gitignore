@@ -1,0 +1,30 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local config: points at your own WoW client. Never commit.
+idle.config.json
+
+# Everything extracted or converted from the Blizzard client lives here. Never commit.
+cache/
+
+# VMaNGOS world database (imported locally at runtime). Never commit.
+data/vmangos/
+
+# Belt and braces: raw client formats must never enter the repo, wherever they land.
+*.mpq
+*.MPQ
+*.dbc
+*.blp
+*.m2
+*.mdx
+*.wmo
+*.adt
+*.wdt
+*.wdl
+*.skin
+*.glb
+*.gltf
+
+# Converted asset outputs (should only ever be under cache/, but just in case)
+**/public/assets/

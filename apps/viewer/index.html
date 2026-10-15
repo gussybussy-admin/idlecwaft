@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Model Viewer</title>
+    <style>
+      :root { color-scheme: dark; --panel: rgba(16, 12, 8, 0.82); --gold: #f8d26c; --text: #e9e1cf; --muted: #a8997a; --edge: #5a4628; }
+      html, body { margin: 0; height: 100%; background: #0d0b09; color: var(--text); font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+      canvas { display: block; }
+      #panel { position: absolute; top: 12px; left: 12px; width: 240px; max-height: calc(100% - 24px); overflow: auto;
+        background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 10px 12px; box-sizing: border-box; }
+      h1 { font-size: 14px; margin: 0 0 8px; color: var(--gold); letter-spacing: 0.04em; }
+      label { display: block; color: var(--muted); margin: 8px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+      select { width: 100%; background: #1d1710; color: var(--text); border: 1px solid var(--edge); border-radius: 4px; padding: 4px; }
+      #anims { display: flex; flex-wrap: wrap; gap: 4px; }
+      #anims button { background: #1d1710; color: var(--text); border: 1px solid var(--edge); border-radius: 4px; padding: 3px 6px; cursor: pointer; font-size: 12px; }
+      #anims button.on { background: #4a3514; border-color: var(--gold); color: var(--gold); }
+      #status { margin-top: 10px; color: var(--muted); font-size: 11px; white-space: pre-line; }
+      @media (max-width: 560px) { #panel { left: 16px; right: 16px; width: auto; max-height: 45%; } }
+    </style>
+  </head>
+  <body>
+    <div id="panel">
+      <h1>Model Viewer</h1>
+      <label for="model">Creature display</label>
+      <select id="model"></select>
+      <label>Animations</label>
+      <div id="anims"></div>
+      <div id="status">loading…</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

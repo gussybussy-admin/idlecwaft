@@ -1,0 +1,13 @@
+{
+  "name": "@idle/assets",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reads a local WoW 1.12.1 client (MPQ, DBC, BLP, M2) and converts assets into a local cache. Ships to each player; never bundles Blizzard data.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "idle-assets": "./src/cli.ts"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "idlecwaft",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "assets": "tsx packages/assets/src/cli.ts",
+    "viewer": "npm run dev -w @idle/viewer",
+    "test": "vitest run",
+    "typecheck": "tsc -p packages/assets && tsc -p apps/viewer"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
