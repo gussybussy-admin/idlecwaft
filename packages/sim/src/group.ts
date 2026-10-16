@@ -7,6 +7,7 @@
 // are reduced by resistances. Members rest between pulls; a wiped pull is retried twice before the
 // run fails. The event log is the replay.
 import type { CreatureDef, GameData, ItemDef } from './data.js';
+import { HUNTER, TAME_LEVEL } from './pets.js';
 import { factionOfRace } from './data.js';
 import type { AbilityEffect, CreatureAbility, DungeonDef } from './dungeons.js';
 import { advance, equipSlots, grantXp, playerStats, proficiencyFor, type SimEvent } from './engine.js';
@@ -70,7 +71,7 @@ export function measureDps(s: GameState, data: GameData, level: number): number 
   let dmg = 0, from = -1;
   advance(c, d, c.now + MEASURE_MS, (e: SimEvent) => {
     if (e.type === 'spawn' && from < 0) from = e.t;
-    if (e.type === 'swing' && e.who === 'player') dmg += e.dmg;
+    if (e.type === 'swing' && (e.who === 'player' || e.who === 'pet') && e.target !== 'pet') dmg += e.dmg;
   });
   const secs = (c.now - (from < 0 ? c.now : from)) / 1000;
   return secs > 0 ? Math.round(dmg / secs) : 0;
@@ -165,11 +166,19 @@ const HIRELING: Record<Role, { cls: number; name: string; race: Record<'alliance
   healer: { cls: 5, name: 'Hired Priest', race: { alliance: 1, horde: 5 } },
   dps: { cls: 8, name: 'Hired Battlemage', race: { alliance: 7, horde: 8 } },
 };
+/** Hired damage dealers come in every class, in turn. */
+const DPS_HIRELINGS: { cls: number; name: string; race: Record<'alliance' | 'horde', number> }[] = [
+  HIRELING.dps,
+  { cls: 4, name: 'Hired Cutthroat', race: { alliance: 1, horde: 2 } },
+  { cls: 9, name: 'Hired Shadowcaller', race: { alliance: 7, horde: 5 } },
+  { cls: 3, name: 'Hired Marksman', race: { alliance: 3, horde: 8 } },
+  { cls: 1, name: 'Hired Blademaster', race: { alliance: 1, horde: 2 } },
+];
 /** Hirelings are paid help: weaker than a geared player, but enough that two friends can run a dungeon. */
 export const HIRELING_POWER = 0.8;
 
 export function hireling(data: GameData, role: Role, level: number, side: 'alliance' | 'horde', n: number, tier = 0): Snapshot {
-  const h = HIRELING[role];
+  const h = role === 'dps' ? DPS_HIRELINGS[n % DPS_HIRELINGS.length] : HIRELING[role];
   const race = data.raceClasses?.[h.race[side]]?.includes(h.cls) ? h.race[side] : (Object.entries(data.raceClasses ?? {}).find(([, cl]) => cl.includes(h.cls))?.[0] ?? 1);
   const s = newGame(data, { name: h.name, race: Number(race), cls: h.cls, seed: 1000 + n, now: 0 });
   s.char.level = level;
@@ -179,6 +188,14 @@ export function hireling(data: GameData, role: Role, level: number, side: 'allia
   for (const id of Object.values(s.equipment)) {
     const prof = id ? proficiencyFor(data.items[id]) : null;
     if (prof) s.combatSkills[prof] = level * 5;
+  }
+  // Hunters shoot (a stack of their level's best ammo) with a beast at their side; warlocks bring a demon.
+  if (h.cls === HUNTER) {
+    const w = s.equipment.ranged ? data.items[s.equipment.ranged] : undefined;
+    const kind = w?.subclass === 3 ? 3 : 2;
+    const ammo = Object.values(data.items).filter(it => it.class === 6 && it.subclass === kind && it.reqLevel <= level).sort((a, b) => b.dmgMax - a.dmgMax)[0];
+    if (ammo) s.inventory[ammo.id] = 2000;
+    if (level >= TAME_LEVEL) s.pet = { kind: 'beast', name: 'Wolf', displayId: 0 };
   }
   s.char.hp = playerStats(s, data).maxHp;
   const snap = snapshotOf(s, data, null, role, level);

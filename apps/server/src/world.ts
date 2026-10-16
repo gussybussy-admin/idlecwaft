@@ -3,7 +3,7 @@
 import {
   addItem, advance, applyCommand, emptySummary, hasItem, migrateState, newGame, OFFLINE_CAP_MS, SKILL_NAME, summarize,
   type Appearance, type BankLogEntry, type ChatMessage, type Command, type CommandResult, type FeedItem,
-  applyRunRewards, dungeonLoot, factionOfRace, groupRoles, MAX_TARGETS, nextReset, hireling, ROLE_CLASSES, ROLES, simulateRun, snapshotOf,
+  applyRunRewards, dungeonLoot, roomFor, factionOfRace, groupRoles, MAX_TARGETS, nextReset, hireling, ROLE_CLASSES, ROLES, simulateRun, snapshotOf,
   type CraftOrder, type DungeonGroup, type GroupMember, type Role, type RunResult, type RunSummary, type Snapshot, type GameData, type GameState, type GuildRequest, type GuildSnapshot, type RosterEntry, type SimEvent, type Summary,
 } from '@idle/sim';
 import type { DB } from './db.js';
@@ -55,7 +55,7 @@ export class World {
     for (const r of db.prepare(`SELECT account_id, name, state, last_seen, away FROM characters`).all() as
       { account_id: number; name: string; state: string; last_seen: number; away: string | null }[]) {
       this.chars.set(r.account_id, {
-        accountId: r.account_id, name: r.name, state: migrateState(JSON.parse(r.state)), lastSeen: r.last_seen, online: 0,
+        accountId: r.account_id, name: r.name, state: migrateState(JSON.parse(r.state), this.data), lastSeen: r.last_seen, online: 0,
         away: r.away ? JSON.parse(r.away) : null, dirty: false, chatTimes: [], lastKillFeed: new Map(),
       });
     }
@@ -233,6 +233,7 @@ export class World {
       if (!isInt(item, 1, 1e7) || !isInt(count, 1, 1e6)) return fail('Invalid item.');
       const row = this.db.prepare(`SELECT count FROM guild_bank WHERE item = ?`).get(item) as { count: number } | undefined;
       if (!row || row.count < count) return fail('The guild bank does not have that many.');
+      if (roomFor(s, this.data, item) < count) return fail('Your bags are full.');
       this.db.transaction(() => {
         if (row.count === count) this.db.prepare(`DELETE FROM guild_bank WHERE item = ?`).run(item);
         else this.db.prepare(`UPDATE guild_bank SET count = count - ? WHERE item = ?`).run(count, item);
@@ -276,6 +277,7 @@ export class World {
     this.advanceChar(asker, now);
     const give = Math.min(count, req.count - req.filled);
     if (!hasItem(filler.state, req.item, give)) return fail("You don't have that many.");
+    if (roomFor(asker.state, this.data, req.item) < give) return fail(`${asker.name}'s bags are full.`);
     this.db.transaction(() => {
       addItem(filler.state, req.item, -give);
       addItem(asker.state, req.item, give);
@@ -369,6 +371,7 @@ export class World {
     this.advanceChar(crafter, now);
     this.advanceChar(buyer, now);
     if (!hasItem(crafter.state, r.item, items)) return fail(`You need ${items} ${this.data.items[r.item]?.name} to deliver.`);
+    if (roomFor(buyer.state, this.data, r.item) < items) return fail(`${buyer.name}'s bags are full.`);
     this.db.transaction(() => {
       addItem(crafter.state, r.item, -items);
       addItem(buyer.state, r.item, items);

@@ -59,6 +59,9 @@ export interface ItemDef {
   elixir?: { stats: [number, number][]; hp: number; armor: number; ap: number; resist: number[]; durationMs: number };
   /** Protection potions: absorb this much damage of one school (1 holy .. 6 arcane). */
   protection?: { school: number; amount: number };
+  /** Bags: how many slots it adds, and (special bags, and the items they hold) the bag family bitmask. */
+  bagSlots?: number;
+  bagFamily?: number;
   /** Instant-use potion: health and mana restored (average). Used automatically in fights when low. */
   potion?: { heal: number; mana: number };
 }
@@ -89,6 +92,8 @@ export interface CreatureDef {
   skin?: LootRef;
   /** Spells it casts in fights (the group simulation's boss mechanics). */
   abilities?: CreatureAbility[];
+  /** Voice and combat sounds (SoundEntries ids): aggro, wound, death, attack. */
+  sounds?: { aggro?: number; wound?: number; death?: number; attack?: number };
   /** Reputation for killing it: faction, amount, highest rank it can take you to; `side` limits it to one team. */
   rep?: { faction: number; value: number; maxRank: number; side?: Faction }[];
   /** Player factions that can attack it (a Stormwind guard is attackable by the Horde only). */
@@ -126,6 +131,8 @@ export interface RecipeDef {
   enchant?: { id: number; itemClass: number; invMask: number };
   /** Where the recipe comes from: trained by default, or taught by a recipe item. */
   source: { trainer: Copper } | { recipeItem: ItemId };
+  /** The crafting sound (SoundEntries id). */
+  sound?: number;
 }
 
 export interface SkillRank { name: string; max: number; reqLevel: number; cost: Copper; spellId: number }
@@ -146,10 +153,22 @@ export interface ZoneDef {
   /** Vendor stock; `factions` lists the player factions the vendor will trade with. */
   vendorItems: { item: ItemId; vendor: string; factions: Faction[] }[];
   taxiNodes: number[];
+  /** Zone music and ambience (SoundEntries ids, day and night). */
+  sound?: { music?: [number, number]; ambience?: [number, number] };
 }
 
 export interface TaxiNode { id: number; name: string; map: number; x: number; y: number; zone: number; factions: Faction[] }
 export interface TaxiPath { from: number; to: number; cost: Copper; length: number }
+
+/** Sounds that aren't attached to a zone, creature or spell (SoundEntries ids). */
+export interface GameSounds {
+  /** Interface sounds by name: levelUp, questAdded, questComplete, questFailed, coins, bag, tab, spellbook, menuOpen, menuClose, eat, select. */
+  ui: Record<string, number>;
+  /** Gathering and crafting: mining, herbalism, skinning, fishing (+ fishHooked, fishReel), alchemy, tailoring, smelting, cooking. */
+  activities: Record<string, number>;
+  /** Melee impact by weapon subclass (-1: unarmed): a normal and a critical hit. */
+  weapons: Record<number, { hit: number; crit: number }>;
+}
 
 export interface GameData {
   version: 2;
@@ -168,6 +187,7 @@ export interface GameData {
   skillNames: Record<number, string>;
   /** Every class spell rank the game uses. */
   spells: Record<number, SpellDef>;
+  sounds?: GameSounds;
   /** What each class learns: from its trainers (level, cost), plus starting spells at level 1 for free. */
   classSpells: Record<number, ClassSpellOffer[]>;
   /** Zones with a trainer for each class. */

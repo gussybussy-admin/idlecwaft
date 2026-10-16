@@ -276,3 +276,17 @@ input.text { background: #000; border: 1px solid var(--edge); border-radius: 4px
 .raid-cell.dead { opacity: 0.45; }
 .raid-cell span { position: relative; padding-left: 3px; text-shadow: 0 0 2px #000; }
 @media (max-width: 640px) { .raid-frames { grid-template-columns: repeat(4, 64px); } }
+
+/* sound */
+.sound-sliders { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 16px; }
+.sound-sliders label { display: grid; grid-template-columns: 110px 1fr 40px; align-items: center; gap: 8px; font-size: 13px; }
+.sound-sliders input[type=range] { width: 100%; accent-color: var(--c-gold, #e6c34a); }
+
+/* pets */
+.pet-panel { padding: 10px 14px; }
+.floater.pet { color: #e9b96e; }
+
+/* bag slots */
+.bag-slots { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.bag-slots .slot.empty { width: 40px; height: 40px; border: 1px dashed rgba(255,255,255,0.18); border-radius: 4px; }
+.bad { color: var(--c-red, #e05a4f); }

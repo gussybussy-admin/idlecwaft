@@ -10,6 +10,7 @@ import { encodePNG } from '../img/png.js';
 import { convertCreature } from './creature.js';
 import { convertItemArt, convertItemModel } from './items.js';
 import { convertObject } from './objects.js';
+import { convertSound } from './sounds.js';
 
 export class LazyArt {
   private failed = new Set<string>();
@@ -43,6 +44,9 @@ export class LazyArt {
       convertCreature(this.client, Number(m[1]), this.cacheDir);
       return true;
     }
+    // Sounds: sounds/<entry>.json lists its files; asking for a file converts its whole entry.
+    m = rel.match(/^sounds\/(\d+)(?:\.json|-\d+\.(?:wav|mp3))$/);
+    if (m) return convertSound(this.client, Number(m[1]), this.cacheDir);
     m = rel.match(/^objects\/(\d+)\.glb$/);
     if (m) return convertObject(this.client, Number(m[1]), this.cacheDir);
     // Equipped items: items/<display>.json, items/<display>-<left|right>[-<race><M|F>].glb

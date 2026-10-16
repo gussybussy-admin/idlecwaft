@@ -36,7 +36,8 @@ export const displayEntry = (id: number) => {
   return displayCache.get(id)!;
 };
 
-const MOB_X = 1.6, PLAYER_X = -1.6;
+const MOB_X = 1.6, PLAYER_X = -1.6, PET_X = -0.3;
+type Who = 'player' | 'mob' | 'pet';
 
 /** The Elwynn clearing every scene stands in: sky, light, grass and dirt from the client, real trees. */
 export function buildClearing(scene: THREE.Scene, isDisposed: () => boolean): void {
@@ -102,6 +103,9 @@ export class Diorama {
   private mob: ActorModel | null = null;
   private mobKey = '';
   private player: ActorModel | null = null;
+  /** A hunter's beast or a warlock's demon, beside the player. */
+  private pet: ActorModel | null = null;
+  private petKey = '';
   private loadToken = 0;
   private disposed = false;
   private focused = document.hasFocus();
@@ -148,9 +152,9 @@ export class Diorama {
   }
 
   /** Projects an actor's head position to host pixel coordinates (for floating combat text). */
-  screenPos(who: 'player' | 'mob'): { x: number; y: number } {
-    const actor = who === 'mob' ? this.mob : this.player;
-    const x = who === 'mob' ? MOB_X : this.playerX;
+  screenPos(who: Who): { x: number; y: number } {
+    const actor = this.actor(who);
+    const x = who === 'mob' ? MOB_X : who === 'pet' ? PET_X : this.playerX;
     let top = 1.8;
     if (actor) top = new THREE.Box3().setFromObject(actor.root).max.y;
     const v = new THREE.Vector3(x, top + 0.2, 0).project(this.camera);
@@ -168,19 +172,7 @@ export class Diorama {
     const token = ++this.loadToken;
     if (this.mob) { this.scene.remove(this.mob.root); this.mob = null; }
     if (!displayIds?.length) return;
-    // Try this spawn's display first, then the others, until one converts.
-    let id: number | undefined, entry: DisplayEntry | null = null;
-    for (let i = 0; i < displayIds.length && !entry; i++) {
-      id = displayIds[(pick + i) % displayIds.length];
-      entry = await displayEntry(id);
-    }
-    let model: ActorModel | null;
-    if (entry?.humanoid) {
-      const built = await buildCharacter(entry.humanoid);
-      model = built ? this.actorFrom(built.root, built.animations, built.durations, entry.scale || 1) : null;
-    } else if (entry) {
-      model = await this.loadActor(`creatures/${id}.glb`, entry.scale || 1);
-    } else model = this.placeholder(0x3a2a1a);
+    const model = await this.loadCreature(displayIds, pick);
     if (token !== this.loadToken || this.disposed || !model) return;
     // A new arrival replaces any corpse still sinking at the same spot.
     if (this.fadeOut) { this.scene.remove(this.fadeOut.actor.root); this.fadeOut = null; }
@@ -191,6 +183,45 @@ export class Diorama {
     this.play(model, model.base, true);
     this.frameCamera();
   }
+
+  /** A creature model: this spawn's display first, then the others, until one converts. */
+  private async loadCreature(displayIds: number[], pick = 0): Promise<ActorModel | null> {
+    let id: number | undefined, entry: DisplayEntry | null = null;
+    for (let i = 0; i < displayIds.length && !entry; i++) {
+      id = displayIds[(pick + i) % displayIds.length];
+      entry = await displayEntry(id);
+    }
+    if (entry?.humanoid) {
+      const built = await buildCharacter(entry.humanoid);
+      return built ? this.actorFrom(built.root, built.animations, built.durations, entry.scale || 1) : null;
+    }
+    if (entry) return this.loadActor(`creatures/${id}.glb`, entry.scale || 1);
+    return this.placeholder(0x3a2a1a);
+  }
+
+  /** Your pet (a creature display id), or none. */
+  async setPet(displayId: number | null) {
+    const key = displayId ? String(displayId) : '';
+    if (key === this.petKey) return;
+    this.petKey = key;
+    if (this.pet) { this.scene.remove(this.pet.root); this.pet = null; }
+    if (!displayId) { this.frameCamera(); return; }
+    const model = await this.loadCreature([displayId]);
+    if (key !== this.petKey || this.disposed || !model) return;
+    // Pets are shown at most player-sized (a tamed bear or a Voidwalker would fill the scene).
+    const h = new THREE.Box3().setFromObject(model.root).getSize(new THREE.Vector3()).y;
+    if (h > 1.6) model.root.scale.multiplyScalar(1.6 / h);
+    model.root.position.set(PET_X, 0, 0.9);
+    model.root.rotation.y = 0; // face the mob (+x)
+    this.scene.add(model.root);
+    this.pet = model;
+    this.play(model, model.base, true);
+    this.frameCamera();
+  }
+  /** The pet is back (revived or summoned again). */
+  revivePet() { if (this.pet) this.play(this.pet, this.pet.base, true); }
+
+  private actor(who: Who): ActorModel | null { return who === 'mob' ? this.mob : who === 'pet' ? this.pet : this.player; }
 
   // ---- props: what the character works at (an ore vein, an anvil, a campfire, water and a bobber)
   private prop: THREE.Object3D | null = null;
@@ -323,23 +354,23 @@ export class Diorama {
   }
 
   // ---- event hooks from the simulation
-  attack(who: 'player' | 'mob') {
-    const a = who === 'mob' ? this.mob : this.player;
+  attack(who: Who) {
+    const a = this.actor(who);
     const n = this.first(a, ['AttackUnarmed', 'Attack1H', 'Attack2H']);
     if (a && n) this.play(a, n, false, 0.08);
   }
-  wound(who: 'player' | 'mob', crit: boolean) {
-    const a = who === 'mob' ? this.mob : this.player;
+  wound(who: Who, crit: boolean) {
+    const a = this.actor(who);
     const n = this.first(a, crit ? ['CombatCritical', 'CombatWound'] : ['CombatWound']);
     if (a && n) this.play(a, n, false, 0.05);
   }
-  dodge(who: 'player' | 'mob') {
-    const a = who === 'mob' ? this.mob : this.player;
+  dodge(who: Who) {
+    const a = this.actor(who);
     const n = this.first(a, ['Dodge', 'ParryUnarmed']);
     if (a && n) this.play(a, n, false, 0.05);
   }
-  die(who: 'player' | 'mob') {
-    const a = who === 'mob' ? this.mob : this.player;
+  die(who: Who) {
+    const a = this.actor(who);
     const n = this.first(a, ['Death']);
     if (a && n) this.play(a, n, false, 0.1);
     if (who === 'mob' && a) {
@@ -353,7 +384,7 @@ export class Diorama {
 
   private frameCamera() {
     const box = new THREE.Box3();
-    for (const a of [this.mob, this.player]) if (a) box.expandByObject(a.root);
+    for (const a of [this.mob, this.player, this.pet]) if (a) box.expandByObject(a.root);
     if (this.prop) box.expandByObject(this.prop);
     if (box.isEmpty()) box.set(new THREE.Vector3(-2, 0, -1), new THREE.Vector3(2, 2, 1));
     const size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
@@ -371,6 +402,7 @@ export class Diorama {
     const dt = Math.min(this.clock.getDelta(), 0.25);
     this.mob?.mixer.update(dt);
     this.player?.mixer.update(dt);
+    this.pet?.mixer.update(dt);
     if (this.opts.preview && this.player) this.player.root.rotation.y += dt * 0.4; // slow turntable
     if (this.fadeOut) {
       // The corpse keeps animating (Death holds its last frame), then sinks into the ground.

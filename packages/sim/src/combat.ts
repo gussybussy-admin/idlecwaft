@@ -145,13 +145,22 @@ export interface CombatPhase {
   cooldowns?: Record<number, number>; queued?: number; combo?: number;
   dots?: Dot[]; shield?: number; targetDodgedAt?: number; selfAvoidedAt?: number;
   mobApMod?: number; mobHastePct?: number;
+  /** Your pet: its health this fight and its next swing. */
+  petHp?: number; petSwingAt?: number;
+  /** Hunters get a few shots in from range before the mob reaches them (when no pet holds it). */
+  openUntil?: number;
 }
 
 export interface CombatCtx {
   data: GameData; def: CreatureDef;
   st: { dmgMin: number; dmgMax: number; speedMs: number; crit: number; spellCrit: number; meleeHit: number; spellHit: number; ap: number; int: number; spi: number; level: number; maxHp: number };
   talents: TalentEffect[];
-  emitSwing(who: 'player' | 'mob', result: 'hit' | 'crit' | 'miss' | 'dodge', dmg: number, spell?: number): void;
+  emitSwing(who: 'player' | 'mob' | 'pet', result: 'hit' | 'crit' | 'miss' | 'dodge', dmg: number, spell?: number): void;
+  /** Shooting from range (hunters with a ranged weapon and ammo): st holds the ranged weapon's numbers. */
+  ranged?: boolean;
+  useAmmo?(): void;
+  /** Your pet's attack, while it lives. */
+  pet?: { dmgMin: number; dmgMax: number; speedMs: number; ignoresArmor: boolean };
   emitHeal(amount: number, spell: number): void;
   raiseWeaponSkill(): number; // returns the current weapon skill value
 }
@@ -159,6 +168,7 @@ export interface CombatCtx {
 /** Next time something happens in this fight. */
 export function combatNextAt(ph: CombatPhase): number {
   let t = Math.min(ph.mobSwingAt, ph.casting ? ph.casting.until : ph.playerSwingAt, ph.decideAt ?? Infinity);
+  if ((ph.petHp ?? 0) > 0 && ph.petSwingAt !== undefined) t = Math.min(t, ph.petSwingAt);
   for (const d of ph.dots ?? []) t = Math.min(t, d.next);
   return t;
 }
@@ -171,7 +181,13 @@ export function combatStep(s: GameState, ph: CombatPhase, ctx: CombatCtx): 'kill
   const now = s.now;
   const dot = (ph.dots ?? []).filter(d => d.next <= now).sort((a, b) => a.next - b.next)[0];
   const swingAt = ph.casting ? Infinity : ph.playerSwingAt;
-  const first = Math.min(ph.casting?.until ?? Infinity, dot?.next ?? Infinity, swingAt, ph.mobSwingAt, ph.decideAt ?? Infinity);
+  const petAt = (ph.petHp ?? 0) > 0 && ctx.pet ? ph.petSwingAt ?? Infinity : Infinity;
+  const first = Math.min(ph.casting?.until ?? Infinity, dot?.next ?? Infinity, swingAt, ph.mobSwingAt, ph.decideAt ?? Infinity, petAt);
+
+  if (petAt === first && petAt < ph.mobSwingAt) {
+    petSwing(s, ph, ctx);
+    return ph.mob.hp <= 0 ? 'killed' : 'continue';
+  }
 
   if (ph.casting && ph.casting.until === first) {
     const sp = ctx.data.spells[ph.casting.spell];
@@ -207,11 +223,27 @@ export function combatStep(s: GameState, ph: CombatPhase, ctx: CombatCtx): 'kill
   return ph.mob.hp <= 0 ? 'killed' : 'continue';
 }
 
+function petSwing(s: GameState, ph: CombatPhase, ctx: CombatCtx): void {
+  const pet = ctx.pet!, mob = ph.mob;
+  ph.petSwingAt = s.now + pet.speedMs;
+  const roll = int(s.rng, 0, 9999) / 100;
+  if (roll < 5) { ctx.emitSwing('pet', 'miss', 0); return; }
+  if (roll < 10 && !pet.ignoresArmor) { ctx.emitSwing('pet', 'dodge', 0); return; }
+  const crit = roll >= 95;
+  let dmg = int(s.rng, pet.dmgMin, pet.dmgMax) * (crit ? 2 : 1);
+  if (!pet.ignoresArmor) dmg = dmg * (1 - armorReduction(ctx.def.stats[mob.level - ctx.def.levelMin].armor, ctx.st.level));
+  dmg = Math.max(1, Math.round(dmg));
+  mob.hp -= dmg;
+  ctx.emitSwing('pet', crit ? 'crit' : 'hit', dmg);
+}
+
 function playerSwing(s: GameState, ph: CombatPhase, ctx: CombatCtx): void {
   const mob = ph.mob, { st, def } = ctx;
   const skill = ctx.raiseWeaponSkill();
-  const wanted = ph.queued !== undefined ? ctx.data.spells[ph.queued] : undefined;
-  ph.queued = undefined;
+  // A queued melee attack (Raptor Strike) waits while you shoot.
+  const wanted = ph.queued !== undefined && !ctx.ranged ? ctx.data.spells[ph.queued] : undefined;
+  if (!ctx.ranged) ph.queued = undefined;
+  if (ctx.ranged) ctx.useAmmo?.();
   // A queued next-swing attack only happens if you can still pay for it; otherwise it's a plain swing.
   const queued = wanted && powerOf(s, wanted) >= wanted.cost ? wanted : undefined;
   if (queued) spend(s, queued);
@@ -252,7 +284,9 @@ function expected(s: GameState, ph: CombatPhase, ctx: CombatCtx, sp: SpellDef): 
 }
 
 function usable(s: GameState, ph: CombatPhase, ctx: CombatCtx, sp: SpellDef): boolean {
-  if (sp.dmgClass === 3) return false; // ranged attacks need a ranged weapon slot (not idleized yet)
+  // Shots need a ranged weapon and ammo; melee specials need the mob in melee range.
+  if (sp.dmgClass === 3 && !ctx.ranged) return false;
+  if (ctx.ranged && (sp.dmgClass === 2 || sp.nextSwing)) return false;
   if (sp.effects.every(e => e.k === 'buff' || e.k === 'thorns' || e.k === 'seal' || e.k === 'conjure')) return false;
   if ((ph.cooldowns?.[sp.chain] ?? 0) > s.now) return false;
   if (powerOf(s, sp) < modded(sp, ctx.talents).cost) return false;
@@ -269,7 +303,7 @@ function decide(s: GameState, ph: CombatPhase, ctx: CombatCtx): void {
   const hpFrac = s.char.hp / ctx.st.maxHp;
 
   // Next-swing attacks (Heroic Strike, Raptor Strike) don't use the GCD: queue one when there's spare power.
-  if (ph.queued === undefined) {
+  if (ph.queued === undefined && !ctx.ranged) {
     const ns = spells.filter(sp => sp.nextSwing).sort((a, b) => expected(s, ph, ctx, b) - expected(s, ph, ctx, a))[0];
     if (ns && powerOf(s, ns) >= ns.cost + (ns.power === 'rage' ? NEXT_SWING_RAGE_RESERVE : 0)) ph.queued = ns.id;
   }
@@ -334,7 +368,7 @@ function castLand(s: GameState, ph: CombatPhase, ctx: CombatCtx, sp: SpellDef): 
   const mob = ph.mob, lvl = ctx.st.level;
   const harmful = sp.effects.some(e => e.k === 'damage' || e.k === 'weapon' || e.k === 'dot' || e.k === 'debuff');
   if (harmful) {
-    const melee = sp.dmgClass === 2;
+    const melee = sp.dmgClass === 2 || sp.dmgClass === 3; // shots roll like weapon attacks
     const diff = Math.max(0, mob.level - lvl);
     const miss = Math.max(melee ? 0 : 1, melee
       ? missChance(lvl * 5, mob.level * 5) - ctx.st.meleeHit
@@ -342,7 +376,8 @@ function castLand(s: GameState, ph: CombatPhase, ctx: CombatCtx, sp: SpellDef): 
     if (chance(s.rng, miss)) { ctx.emitSwing('player', 'miss', 0, sp.id); return; } // the cost is still spent
   }
   const md = modded(sp, ctx.talents);
-  const critChance = (sp.dmgClass === 2 ? ctx.st.crit : ctx.st.spellCrit) + md.critBonus;
+  const physical = sp.dmgClass === 2 || sp.dmgClass === 3;
+  const critChance = (physical ? ctx.st.crit : ctx.st.spellCrit) + md.critBonus;
   const crit = chance(s.rng, critChance);
   let dealt = 0;
   for (const e of sp.effects) {
@@ -351,7 +386,7 @@ function castLand(s: GameState, ph: CombatPhase, ctx: CombatCtx, sp: SpellDef): 
         let v = scaled(e.base, e.perLevel, sp, lvl) + int(s.rng, 0, e.dice) + e.perCombo * (ph.combo ?? 0);
         if (e.perCombo) ph.combo = 0;
         if (sp.school === 0) v = Math.round(v * (1 - armorReduction(ctx.def.stats[mob.level - ctx.def.levelMin].armor, lvl)));
-        dealt += Math.round((v * md.dmgMult + md.dmgFlat) * (crit ? (sp.dmgClass === 2 ? 2 : 1.5) : 1));
+        dealt += Math.round((v * md.dmgMult + md.dmgFlat) * (crit ? (physical ? 2 : 1.5) : 1));
         break;
       }
       case 'weapon': {

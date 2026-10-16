@@ -6,6 +6,7 @@ import {
 } from '@idle/sim';
 import { game } from './game.js';
 import { GroupDiorama } from './groupscene.js';
+import { sound } from './sound.js';
 import { topDrops } from './loot-preview.js';
 import { Bar, fmtTime, Icon, ItemIcon, ItemTooltip, withTip } from './ui.js';
 
@@ -258,6 +259,12 @@ function ReplayPlayer({ data, rep, onClose, started, ends, watching }: {
   }, [snapshots]);
   const P = (i: number) => slot[i] ?? -1;
   const mobName = (uid: number) => data.creatures[state.current.mobs.get(uid)?.id ?? 0]?.name ?? 'Enemy';
+  const abilitySounds = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const e of d?.encounters ?? []) for (const [id] of e.mobs) for (const a of data.creatures[id]?.abilities ?? []) if (a.sound) m.set(a.spell, a.sound);
+    return m;
+  }, [d]);
+  const abilitySound = (id?: number) => (id ? abilitySounds.get(id) : undefined);
   const spellName = (id?: number) => (id ? Object.values(data.creatures).flatMap(c => c.abilities ?? []).find(a => a.spell === id)?.name : undefined);
 
   useEffect(() => {
@@ -319,6 +326,7 @@ function ReplayPlayer({ data, rep, onClose, started, ends, watching }: {
           st.hp = snapshots.map(s => s.maxHp);
           g?.reviveParty();
           g?.setMobs(e.mobs.map(m => ({ uid: m.uid, displayIds: data.creatures[m.id]?.displayIds ?? [] })));
+          if (g) sound.play(data.creatures[e.mobs[0]?.id]?.sounds?.aggro, 'voices');
           lines.push(`— Pull ${e.enc + 1}: ${e.mobs.map(m => data.creatures[m.id]?.name).join(', ')}`);
           break;
         case 'hit':
@@ -326,11 +334,13 @@ function ReplayPlayer({ data, rep, onClose, started, ends, watching }: {
             st.hp[e.dst] = Math.max(0, st.hp[e.dst] - e.amt);
             if (e.src >= 0) g?.attack(e.src, true);
             g?.wound(P(e.dst), false);
+            if (g) { if (e.spell) sound.play(abilitySound(e.spell)); else if (Math.random() < 0.2) sound.play(data.creatures[st.mobs.get(e.src)?.id ?? 0]?.sounds?.attack, 'voices'); }
             fl(P(e.dst), false, String(e.amt), 'mob');
           } else {
             const m = st.mobs.get(e.dst);
             if (m) m.hp = Math.max(0, m.hp - e.amt);
             g?.attack(P(e.src), false);
+            if (g && Math.random() < 0.25) sound.play(data.sounds?.weapons[7]?.[e.crit ? 'crit' : 'hit'], 'effects', 0.6);
             fl(e.dst, true, String(e.amt), `player ${e.crit ? 'crit' : ''}`);
           }
           break;
@@ -341,10 +351,12 @@ function ReplayPlayer({ data, rep, onClose, started, ends, watching }: {
           break;
         case 'cast':
           g?.cast(e.mob, true);
+          if (g) sound.play(abilitySound(e.spell));
           lines.push(`${mobName(e.mob)} casts ${spellName(e.spell) ?? 'a spell'}${e.dst === 'all' ? ' on everyone' : e.dst >= 0 ? ` on ${snapshots[e.dst]?.name}` : ''}.`);
           break;
         case 'die':
           g?.die(e.mob ? e.who : P(e.who), e.mob);
+          if (g && e.mob) sound.play(data.creatures[st.mobs.get(e.who)?.id ?? 0]?.sounds?.death, 'voices');
           lines.push(e.mob ? `${mobName(e.who)} dies.` : `${snapshots[e.who]?.name} dies.`);
           break;
         case 'clear': lines.push(`Pull ${e.enc + 1} cleared.`); break;

@@ -3,7 +3,7 @@ import {
   advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, planTravel, playerStats,
   rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, trainSpells, knownSpells,
   learnTalent, pointsSpent, modded, activeTalentEffects, resetTalents, resetCost,
-  disenchant, unlearnProfession, itemCategory, dungeonLoot, nextReset, withRaidBuffs, groupRoles, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
+  disenchant, unlearnProfession, itemCategory, bagSpace, roomFor, equipBag, activePet, rangedStats, dungeonLoot, nextReset, withRaidBuffs, groupRoles, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
   type GameState, type SimEvent,
 } from '../src/index.js';
 import { fixture } from './fixture.js';
@@ -556,8 +556,13 @@ describe('professions and commands', () => {
     train(s, data, 'fishing');
     buy(s, data, 11);
     expect(startAction(s, data, { kind: 'fish' }).ok).toBe(true);
-    advance(s, data, T0 + 3_600_000);
-    expect((s.inventory[3] ?? 0) + (s.inventory[4] ?? 0)).toBeGreaterThan(50);
+    const events: SimEvent[] = [];
+    advance(s, data, T0 + 3_600_000, e => events.push(e));
+    expect((s.inventory[3] ?? 0) + (s.inventory[4] ?? 0)).toBeGreaterThan(20);
+    // Boots don't stack: the 16-slot backpack fills up, and fishing stops.
+    expect(bagSpace(s, data).used).toBe(16);
+    expect(events.some(e => e.type === 'stop' && e.reason === 'Your bags are full.')).toBe(true);
+    expect(s.action).toBeNull();
   });
 
   it('equipping a weapon raises damage; selling pays copper', () => {
@@ -667,5 +672,106 @@ describe('raids', () => {
     expect(buffed.maxHp).toBeGreaterThan(1000);
     expect(groupRoles(40)).toEqual({ tanks: 4, healers: 10 });
     expect(groupRoles(20)).toEqual({ tanks: 2, healers: 5 });
+  });
+});
+
+describe('hunters and warlocks', () => {
+  const d = fixture();
+  d.classStats[3] = d.classStats[1];
+  d.classStats[9] = d.classStats[8];
+  d.levelStats[1][3] = d.levelStats[1][1];
+  d.levelStats[1][9] = d.levelStats[1][8];
+  const base = d.items[1];
+  d.items[30] = { ...base, id: 30, name: 'Test Bow', class: 2, subclass: 2, invType: 15, stack: 1, dmgMin: 5, dmgMax: 9, delayMs: 2800 };
+  d.items[31] = { ...base, id: 31, name: 'Test Arrow', class: 6, subclass: 2, invType: 24, stack: 200, dmgMin: 1, dmgMax: 2 };
+  const as = (cls: number, level: number) => {
+    const s = newGame(d, { name: 'Tester', race: 1, cls: 1, seed: 9, now: T0 });
+    s.char.cls = cls;
+    s.char.level = level;
+    s.char.hp = playerStats(s, d).maxHp;
+    s.inventory[5] = 200;
+    return s;
+  };
+  it('hunters shoot with a ranged weapon and ammo (one arrow per shot), and melee without ammo', () => {
+    const s = as(3, 5);
+    s.equipment.ranged = 30;
+    expect(rangedStats(s, d, 20)).toBeNull(); // no arrows yet
+    s.inventory[31] = 100;
+    expect(rangedStats(s, d, 20)!.dmgMin).toBeGreaterThan(5);
+    const events: SimEvent[] = [];
+    startAction(s, d, { kind: 'fight', creature: 100 });
+    advance(s, d, T0 + 10 * 60_000, e => events.push(e));
+    const shots = events.filter(e => e.type === 'swing' && e.who === 'player' && e.ranged).length;
+    expect(shots).toBeGreaterThan(0);
+    expect(100 - (s.inventory[31] ?? 0)).toBe(shots); // opening shots only: no pet below level 10
+    expect(events.some(e => e.type === 'swing' && e.who === 'player' && !e.ranged)).toBe(true);
+  });
+  it('a tamed beast holds the mob, so the hunter keeps shooting', () => {
+    const s = as(3, 9);
+    expect(applyCommand(s, d, { name: 'tame', creature: 100 })).toEqual({ ok: false, error: 'You learn Tame Beast at level 10.' });
+    s.char.level = 10;
+    s.char.hp = playerStats(s, d).maxHp;
+    expect(applyCommand(s, d, { name: 'tame', creature: 101 }).ok).toBe(false); // an elite
+    expect(applyCommand(s, d, { name: 'tame', creature: 100 }).ok).toBe(true);
+    expect(activePet(s)?.name).toBe('Test Boar');
+    s.equipment.ranged = 30;
+    s.inventory[31] = 200;
+    const events: SimEvent[] = [];
+    startAction(s, d, { kind: 'fight', creature: 100 });
+    advance(s, d, T0 + 10 * 60_000, e => events.push(e));
+    const mobHits = events.filter(e => e.type === 'swing' && e.who === 'mob');
+    expect(mobHits.filter(e => e.type === 'swing' && e.target === 'pet').length).toBeGreaterThan(mobHits.length / 2);
+    expect(events.filter(e => e.type === 'swing' && e.who === 'pet' && e.dmg > 0).length).toBeGreaterThan(0);
+    const player = events.filter(e => e.type === 'swing' && e.who === 'player' && !e.spell);
+    expect(player.filter(e => e.type === 'swing' && e.ranged).length).toBeGreaterThan(player.length * 0.8);
+  });
+  it('warlocks summon the Imp from level 1 and the Voidwalker (which tanks) from 10', () => {
+    const s = as(9, 5);
+    expect(activePet(s)?.kind).toBe('imp');
+    expect(applyCommand(s, d, { name: 'demon', kind: 'voidwalker' }).ok).toBe(false);
+    s.char.level = 10;
+    expect(activePet(s)?.kind).toBe('voidwalker');
+    const events: SimEvent[] = [];
+    startAction(s, d, { kind: 'fight', creature: 100 });
+    advance(s, d, T0 + 5 * 60_000, e => events.push(e));
+    expect(events.some(e => e.type === 'swing' && e.target === 'pet')).toBe(true);
+    expect(applyCommand(s, d, { name: 'demon', kind: 'imp' }).ok).toBe(true);
+    expect(activePet(s)?.kind).toBe('imp');
+  });
+});
+
+describe('bags', () => {
+  const d = fixture();
+  d.items[40] = { ...d.items[1], id: 40, name: 'Test Pouch', class: 1, invType: 18, stack: 1, bagSlots: 6 };
+  d.items[41] = { ...d.items[1], id: 41, name: 'Test Quiver', class: 11, invType: 18, stack: 1, bagSlots: 4, bagFamily: 1 };
+  d.items[42] = { ...d.items[1], id: 42, name: 'Test Arrow', class: 6, subclass: 2, stack: 200, bagFamily: 1 };
+  const fill = (s: GameState, n: number) => { for (let i = 0; i < n; i++) s.inventory[1000 + i] = 1; for (let i = 0; i < n; i++) d.items[1000 + i] ??= { ...d.items[23], id: 1000 + i }; };
+  it('a backpack holds 16 stacks; bags add slots; special bags hold only their family', () => {
+    const s = newGame(d, { name: 'Tester', race: 1, cls: 1, seed: 1, now: T0 });
+    s.inventory = {};
+    fill(s, 16);
+    expect(bagSpace(s, d)).toMatchObject({ total: 16, used: 16 });
+    expect(roomFor(s, d, 1)).toBe(0);
+    s.gold = 1000;
+    expect(buy(s, d, 10, 1)).toEqual({ ok: false, error: 'Your bags are full.' });
+    delete s.inventory[1015];
+    s.inventory[40] = 1;
+    expect(equipBag(s, d, 40).ok).toBe(true);
+    expect(bagSpace(s, d)).toMatchObject({ total: 22, used: 15 });
+    s.inventory[41] = 1;
+    expect(equipBag(s, d, 41).ok).toBe(true);
+    s.inventory[42] = 800; // four stacks of arrows: all in the quiver
+    expect(bagSpace(s, d).used).toBe(15);
+    expect(roomFor(s, d, 42)).toBe(7 * 200); // the quiver is full: arrows go in the 7 free general slots
+    expect(applyCommand(s, d, { name: 'unequipBag', slot: 1 }).ok).toBe(true); // the arrows (and the quiver) move to general slots
+    expect(bagSpace(s, d)).toMatchObject({ total: 22, used: 20 });
+    s.inventory[2000] = 1; d.items[2000] = { ...d.items[23], id: 2000 }; s.inventory[2001] = 1; d.items[2001] = { ...d.items[23], id: 2001 };
+    s.inventory[2002] = 1; d.items[2002] = { ...d.items[23], id: 2002 };
+    expect(applyCommand(s, d, { name: 'unequipBag', slot: 0 }).ok).toBe(false); // 23 stacks wouldn't fit in 16
+  });
+  it('characters from before bag limits get four bags', () => {
+    const s = newGame(d, { name: 'Tester', race: 1, cls: 1, seed: 1, now: T0 });
+    delete (s as Partial<GameState>).bags;
+    expect(migrateState(s, d).bags).toEqual([40, 40, 40, 40]);
   });
 });

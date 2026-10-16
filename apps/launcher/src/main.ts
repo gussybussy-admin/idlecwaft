@@ -114,6 +114,7 @@ async function ensureArt(cfg: Config, dataVersion: string): Promise<void> {
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.glb': 'model/gltf-binary', '.ttf': 'font/ttf', '.svg': 'image/svg+xml',
+  '.wav': 'audio/wav', '.mp3': 'audio/mpeg',
 };
 
 /** The client build, from the embedded copy (packaged) or apps/game/dist (from source). */

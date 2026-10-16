@@ -74,7 +74,8 @@ export function createServer({ db, world, gameDataJson, clock = Date.now, launch
     if (req.method === 'GET' && url.pathname === '/api/gamedata') {
       if (req.headers['if-none-match'] === dataVersion) { res.writeHead(304); res.end(); return; }
       const gzip = /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''));
-      res.writeHead(200, { 'content-type': 'application/json', etag: dataVersion, ...(gzip ? { 'content-encoding': 'gzip' } : {}) });
+      // Revalidate every time: unchanged data is a 304 instead of re-downloading it.
+      res.writeHead(200, { 'content-type': 'application/json', etag: dataVersion, 'cache-control': 'no-cache', ...(gzip ? { 'content-encoding': 'gzip' } : {}) });
       res.end(gzip ? gameDataGzip : gameDataJson);
       return;
     }

@@ -1,6 +1,9 @@
 // Every player action as data. The server validates and applies these; nothing else changes a
 // character, so a command log plus the seeded RNG fully determines a character's history.
 import type { GameData } from './data.js';
+import { BAG_SLOTS, unequipBag } from './bags.js';
+import { log } from './state.js';
+import { DEMONS, HUNTER, knownDemons, tameError, WARLOCK, type PetKind } from './pets.js';
 import type { Action, GameState, Profession, Slot } from './state.js';
 import { PROFESSIONS, SLOTS } from './state.js';
 import { learnTalent, resetTalents } from './talents.js';
@@ -28,7 +31,13 @@ export type Command =
   | { name: 'disenchant'; item: number }
   | { name: 'acceptQuest'; quest: number }
   | { name: 'abandonQuest'; quest: number }
-  | { name: 'turnInQuest'; quest: number; choice?: number };
+  | { name: 'turnInQuest'; quest: number; choice?: number }
+  /** Hunters: tame a beast that lives in your zone. */
+  | { name: 'tame'; creature: number }
+  /** Warlocks: which demon to summon. */
+  | { name: 'demon'; kind: Exclude<PetKind, 'beast'> }
+  | { name: 'dismissPet' }
+  | { name: 'unequipBag'; slot: number };
 
 const int = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 
@@ -62,6 +71,10 @@ export function parseCommand(raw: unknown): Command | null {
       if (!int(c.quest, 1, 1e7)) return null;
       return int(c.choice, 1, 1e7) ? { name: 'turnInQuest', quest: c.quest as number, choice: c.choice as number } : { name: 'turnInQuest', quest: c.quest as number };
     }
+    case 'tame': return int(c.creature, 1, 1e7) ? { name: 'tame', creature: c.creature as number } : null;
+    case 'demon': return typeof c.kind === 'string' && c.kind in DEMONS ? { name: 'demon', kind: c.kind as Exclude<PetKind, 'beast'> } : null;
+    case 'dismissPet': return { name: 'dismissPet' };
+    case 'unequipBag': return int(c.slot, 0, BAG_SLOTS - 1) ? { name: 'unequipBag', slot: c.slot as number } : null;
     case 'train': return PROFESSIONS.includes(c.skill as Profession) ? { name: 'train', skill: c.skill as Profession } : null;
     case 'learnRecipe': return int(c.recipe, 1, 1e7) ? { name: 'learnRecipe', recipe: c.recipe as number } : null;
     case 'buy': case 'sell':
@@ -104,6 +117,28 @@ export function applyCommand(s: GameState, data: GameData, c: Command): CommandR
     case 'acceptQuest': return acceptQuest(s, data, c.quest);
     case 'abandonQuest': return abandonQuest(s, data, c.quest);
     case 'turnInQuest': return completeQuest(s, data, c.quest, c.choice);
+    case 'tame': {
+      const def = data.creatures[c.creature];
+      const err = tameError(s, def);
+      if (err) return { ok: false, error: err };
+      if (!data.zones.find(z => z.id === s.zone)?.creatures.some(x => x.id === c.creature)) return { ok: false, error: `There are no ${def!.name}s here.` };
+      if (s.action?.kind === 'dungeon') return { ok: false, error: "You're in a dungeon." };
+      s.pet = { kind: 'beast', name: def!.name, creature: def!.id, displayId: def!.displayIds[0] ?? 0 };
+      log(s, 'info', `You tame ${def!.name}. It will fight at your side.`);
+      return { ok: true };
+    }
+    case 'demon': {
+      if (s.char.cls !== WARLOCK) return { ok: false, error: 'Only warlocks summon demons.' };
+      if (!knownDemons(s.char.level).includes(c.kind)) return { ok: false, error: `You learn to summon the ${DEMONS[c.kind].name} at level ${DEMONS[c.kind].level}.` };
+      s.pet = { kind: c.kind, name: DEMONS[c.kind].name, displayId: DEMONS[c.kind].displayId, chosen: true };
+      return { ok: true };
+    }
+    case 'unequipBag': return unequipBag(s, data, c.slot);
+    case 'dismissPet':
+      if (s.char.cls !== HUNTER || !s.pet) return { ok: false, error: 'No pet to release.' };
+      log(s, 'info', `You release ${s.pet.name}.`);
+      delete s.pet;
+      return { ok: true };
     case 'settings':
       if (c.autoEat !== undefined) s.settings.autoEat = c.autoEat;
       if (c.eatBelowPct !== undefined) s.settings.eatBelowPct = c.eatBelowPct;

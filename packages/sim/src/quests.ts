@@ -106,11 +106,14 @@ export function questComplete(s: GameState, data: GameData, id: number): boolean
   return !!s.quests[id] && questObjectives(s, data, id).every(o => o.have >= o.need);
 }
 
+/** Quests give more than in vanilla, since solo kills give less (see KILL_XP_RATE). */
+export const QUEST_XP_RATE = 1.5;
+
 /** Quest XP after the vanilla reduction for out-levelled quests. */
 export function questXp(q: QuestDef, level: number): number {
   const diff = level - q.level;
   const f = diff <= 5 ? 1 : diff === 6 ? 0.8 : diff === 7 ? 0.6 : diff === 8 ? 0.4 : diff === 9 ? 0.2 : 0.1;
-  return Math.round(q.xp * f);
+  return Math.round(q.xp * f * QUEST_XP_RATE);
 }
 
 /** Quest items still needed by the quest log (so quest-only drops can roll). */

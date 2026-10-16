@@ -15,6 +15,7 @@ import { buildTalents } from './talents.js';
 import { buildEnchants, buildRecipes, buildSkillRanks } from './professions.js';
 import { buildFactions, buildQuests, killReputation } from './quests.js';
 import { buildDungeons } from './dungeons.js';
+import { attachSounds } from './sounds.js';
 
 const LOCKTYPE_HERBALISM = 2, LOCKTYPE_MINING = 3, LOCK_KEY_SKILL = 2;
 const GO_TYPE_CHEST = 3;
@@ -343,6 +344,8 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
     levelStats, classStats: classStatsOut, skillRanks,
     zones, creatures, items: itemDefs, nodes, recipes, enchants, quests, factions, dungeons, loot, taxiNodes, taxiPaths,
   };
+  attachSounds(client, data);
+  log(`sounds: ${data.zones.filter(z => z.sound).length} zones, ${Object.values(data.creatures).filter(c => c.sounds).length} creatures, ${Object.values(data.spells).filter(x => x.sound).length} spells`);
   const out = path.join(opts.cacheDir, 'data');
   fs.mkdirSync(out, { recursive: true });
   const json = JSON.stringify(data);
@@ -409,6 +412,8 @@ function itemDef(t: Row, icons: Map<number, string>, vm: VMangos, durations: Map
   const resist = [0, Number(t.holy_res), Number(t.fire_res), Number(t.nature_res), Number(t.frost_res), Number(t.shadow_res), Number(t.arcane_res)];
   if (resist.some(Boolean)) def.resist = resist;
   if (Number(t.block)) def.block = Number(t.block);
+  if (Number(t.container_slots)) def.bagSlots = Number(t.container_slots);
+  if (Number(t.bag_family)) def.bagFamily = Number(t.bag_family);
   if (Number(t.required_reputation_faction)) def.reqRep = [Number(t.required_reputation_faction), Number(t.required_reputation_rank)];
   if (Number(t.disenchant_id) && def.quality >= 2) {
     const key = `de:${Number(t.disenchant_id)}`;

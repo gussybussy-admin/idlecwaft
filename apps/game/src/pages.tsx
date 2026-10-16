@@ -1,11 +1,12 @@
 // Game pages: combat, gathering, fishing, cooking, character, town, log.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   canFish, canGather, equipSlots, factionOfRace, fishingCatchChance, gatherColor, killXp, MAX_PRIMARY,
-  playerStats, PRIMARY_PROFESSIONS, rankTerms, REP_RANKS, PROFESSIONS, SKILL_NAME, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
+  activePet, bagSpace, DEMONS, HUNTER, knownDemons, petStats, rangedStats, TAME_LEVEL, tameError, WARLOCK, playerStats, PRIMARY_PROFESSIONS, rankTerms, REP_RANKS, PROFESSIONS, SKILL_NAME, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
 } from '@idle/sim';
 import { game } from './game.js';
 import { Diorama, type Activity } from './diorama.js';
+import { sound, type SoundSettings } from './sound.js';
 import { topDrops } from './loot-preview.js';
 import { PowerBar } from './spells.js';
 import { CraftPage } from './crafting.js';
@@ -32,6 +33,7 @@ export function CombatPage({ s, data }: P) {
       <div className="panel-head"><h2>{zone.name}</h2><span className="muted">Levels {zone.levelMin}-{zone.levelMax}</span><span className="spacer" />
         {s.action && <button className="btn secondary" onClick={() => game.command({ name: 'stop' })}>Stop</button>}</div>
       <ActionScene s={s} data={data} hint="Pick a creature to fight" />
+      <PetPanel s={s} data={data} />
       <div className="panel">
         <div className="panel-head"><h3>Creatures</h3><span className="spacer" />
           <label className="muted" style={{ fontSize: 12 }}><input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} /> Show all levels</label></div>
@@ -61,6 +63,9 @@ export function CombatPage({ s, data }: P) {
                   {fighting === id
                     ? <button className="btn secondary" onClick={() => game.command({ name: 'stop' })}>Stop</button>
                     : <button className="btn" onClick={() => game.command({ name: 'start', action: { kind: 'fight', creature: id } })}>Fight</button>}
+                  {s.char.cls === HUNTER && !tameError(s, d) && s.pet?.creature !== id && (
+                    <button className="btn secondary small" title={s.pet ? `Replaces ${s.pet.name}` : 'It will fight at your side and hold the mob'}
+                      onClick={() => game.command({ name: 'tame', creature: id })}>Tame</button>)}
                 </div>
               </div>
             );
@@ -68,6 +73,35 @@ export function CombatPage({ s, data }: P) {
         </div>
       </div>
     </>
+  );
+}
+
+/** Your pet: a hunter's tamed beast (tame one from the list below) or a warlock's demon (pick one). */
+function PetPanel({ s, data }: P) {
+  if (s.char.cls !== HUNTER && s.char.cls !== WARLOCK) return null;
+  const pet = activePet(s);
+  const ranged = s.char.cls === HUNTER ? rangedStats(s, data, playerStats(s, data).agi) : null;
+  const w = s.equipment.ranged ? data.items[s.equipment.ranged] : undefined;
+  return (
+    <div className="panel pet-panel">
+      <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div className="title">{pet ? pet.name : s.char.cls === HUNTER ? 'No pet' : 'No demon'}
+            {pet && <span className="tag" style={{ marginLeft: 6 }}>{pet.kind === 'beast' || petStats(s, data, pet).tank ? 'holds the mob' : 'damage'}</span>}</div>
+          <div className="meta">{s.char.cls === HUNTER
+            ? (s.char.level < TAME_LEVEL ? `You learn Tame Beast at level ${TAME_LEVEL}.` : pet ? 'Your pet holds the mob while you shoot.' : 'Tame a beast of your level or lower from the list below.')
+            : 'Your demon fights beside you. The Voidwalker holds the mob; the others deal damage.'}</div>
+          {s.char.cls === HUNTER && <div className="meta">{ranged
+            ? `Shooting with ${w?.name}: ${ranged.dmgMin}-${ranged.dmgMax} per shot, ${data.items[ranged.ammo]?.name} (${s.inventory[ranged.ammo] ?? 0} left)`
+            : w ? `No ${w.subclass === 3 ? 'bullets' : 'arrows'} for your ${w.name}: buy some from a vendor to shoot.` : 'Equip a bow, gun or crossbow and carry ammo to fight from range.'}</div>}
+        </div>
+        <div className="btn-row">
+          {s.char.cls === WARLOCK && knownDemons(s.char.level).map(k => (
+            <button key={k} className={`chip ${pet?.kind === k ? 'on' : ''}`} onClick={() => game.command({ name: 'demon', kind: k })}>{DEMONS[k].name}</button>))}
+          {s.char.cls === HUNTER && s.pet && <button className="btn secondary small" onClick={() => game.command({ name: 'dismissPet' })}>Release</button>}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -86,13 +120,21 @@ export function ActionScene({ s, data, hint }: P & { hint?: string }) {
   const dio = useRef<Diorama | null>(null);
   const [floaters, setFloaters] = useState<Floater[]>([]);
   const fid = useRef(0);
+  const latest = useRef(s);
+  latest.current = s;
 
   useEffect(() => {
     const d = new Diorama(host.current!);
+    const snd = data.sounds;
+    let mobId = 0;
+    const weaponSound = () => {
+      const w = latest.current.equipment.mainhand ? data.items[latest.current.equipment.mainhand] : undefined;
+      return snd?.weapons[w?.class === 2 ? w.subclass : -1] ?? snd?.weapons[-1];
+    };
     dio.current = d;
     const off = game.onEvent((e: SimEvent) => {
-      const float = (who: 'player' | 'mob', text: string, cls: string, over?: 'player' | 'mob') => {
-        const p = d.screenPos(over ?? (who === 'player' ? 'mob' : 'player')); // damage shows over the one hit
+      const float = (who: 'player' | 'mob' | 'pet', text: string, cls: string, over?: 'player' | 'mob' | 'pet') => {
+        const p = d.screenPos(over ?? (who === 'mob' ? 'player' : 'mob')); // damage shows over the one hit
         const f = { id: ++fid.current, x: p.x + (Math.random() - 0.5) * 30, y: p.y, text, cls };
         setFloaters(fs => [...fs.slice(-12), f]);
         setTimeout(() => setFloaters(fs => fs.filter(x => x.id !== f.id)), 1100);
@@ -100,18 +142,41 @@ export function ActionScene({ s, data, hint }: P & { hint?: string }) {
       switch (e.type) {
         case 'swing': {
           d.attack(e.who);
-          const target = e.who === 'player' ? 'mob' : 'player';
-          if (e.result === 'hit' || e.result === 'crit') { d.wound(target, e.result === 'crit'); float(e.who, e.spell ? `${data.spells[e.spell]?.name ?? ''} ${e.dmg}` : String(e.dmg), `${e.who} ${e.result === 'crit' ? 'crit' : ''} ${e.spell ? 'spell' : ''}`); }
-          else { if (e.result === 'dodge') d.dodge(target); float(e.who, e.result === 'miss' ? 'Miss' : 'Dodge', 'miss'); }
+          // Sounds: your weapon or spell landing, the mob's attack voice and its pain.
+          if (e.who === 'pet') {
+            if (e.result === 'hit' || e.result === 'crit') sound.play(snd?.weapons[-1]?.[e.result === 'crit' ? 'crit' : 'hit'], 'effects', 0.6);
+          } else if (e.who === 'player') {
+            const sp = e.spell ? data.spells[e.spell]?.sound : undefined;
+            if (e.result === 'hit' || e.result === 'crit') {
+              if (sp) sound.play(sp.impact ?? sp.cast);
+              else if (e.ranged) { const r = latest.current.equipment.ranged ? data.items[latest.current.equipment.ranged] : undefined; sound.play(snd?.weapons[r?.subclass ?? 2]?.[e.result === 'crit' ? 'crit' : 'hit']); }
+              else { const w = weaponSound(); sound.play(e.result === 'crit' ? w?.crit : w?.hit); }
+              if (Math.random() < 0.3) sound.play(data.creatures[mobId]?.sounds?.wound, 'voices');
+            } else if (sp?.cast) sound.play(sp.cast);
+          } else {
+            if (Math.random() < 0.35) sound.play(data.creatures[mobId]?.sounds?.attack, 'voices');
+            if (e.result === 'hit' || e.result === 'crit') sound.play(snd?.weapons[-1]?.[e.result === 'crit' ? 'crit' : 'hit'], 'effects', 0.7);
+          }
+          const target = e.who === 'mob' ? e.target ?? 'player' : 'mob';
+          const cls = e.who === 'pet' ? 'player pet' : e.who;
+          if (e.result === 'hit' || e.result === 'crit') { d.wound(target, e.result === 'crit'); float(e.who, e.spell ? `${data.spells[e.spell]?.name ?? ''} ${e.dmg}` : String(e.dmg), `${cls} ${e.result === 'crit' ? 'crit' : ''} ${e.spell ? 'spell' : ''}`, target); }
+          else { if (e.result === 'dodge') d.dodge(target); float(e.who, e.result === 'miss' ? 'Miss' : 'Dodge', 'miss', target); }
           break;
         }
-        case 'heal': float('player', `+${e.amount}`, 'heal', 'player'); break;
-        case 'spawn': d.setMob(data.creatures[e.mob.id]?.displayIds ?? null, Math.floor(e.t / 1000)); break;
-        case 'kill': d.die('mob'); break;
+        case 'heal': float('player', `+${e.amount}`, 'heal', 'player'); sound.play(e.spell ? data.spells[e.spell]?.sound?.impact ?? data.spells[e.spell]?.sound?.cast : snd?.ui.eat); break;
+        case 'spawn': mobId = e.mob.id; d.setMob(data.creatures[e.mob.id]?.displayIds ?? null, Math.floor(e.t / 1000)); sound.play(data.creatures[e.mob.id]?.sounds?.aggro, 'voices'); break;
+        case 'kill': d.die('mob'); sound.play(data.creatures[e.creature]?.sounds?.death, 'voices'); if (e.gold) sound.play(snd?.ui.coins, 'effects', 0.6); break;
+        case 'eat': sound.play(snd?.ui.eat); break;
+        case 'petdeath': d.die('pet'); break;
         case 'death': d.die('player'); d.setActivity('dead'); break;
-        case 'revive': d.revive(); break;
+        case 'revive': d.revive(); d.revivePet(); break;
         case 'harvest':
           if (e.skill === 'skinning' || e.skill === 'mining' || e.skill === 'herbalism') d.harvest();
+          {
+            const a = latest.current.action;
+            const id = a?.kind === 'craft' ? data.recipes[a.recipe]?.sound ?? snd?.activities[e.skill] : e.skill === 'fishing' ? snd?.activities.fishReel : snd?.activities[e.skill];
+            sound.play(id);
+          }
           for (const [i, n] of e.items.slice(0, 2)) float('player', `+${n} ${data.items[i]?.name ?? ''}`, 'loot', 'player');
           break;
       }
@@ -139,6 +204,12 @@ export function ActionScene({ s, data, hint }: P & { hint?: string }) {
   });
   if (tool) gear.push({ displayId: tool.displayId, invType: tool.invType, slot: 'mainhand' });
   useEffect(() => { dio.current?.setPlayer({ race: s.char.race, ...look }, gear); }, [s.char.race, JSON.stringify(look), JSON.stringify(gear)]);
+
+  // Your pet stands beside you while you fight.
+  const pet = a?.kind === 'fight' ? activePet(s) : null;
+  const petDisplay = pet ? pet.displayId || (pet.creature ? data.creatures[pet.creature]?.displayIds[0] : 0) || null : null;
+  useEffect(() => { dio.current?.setPet(petDisplay); }, [petDisplay]);
+  useEffect(() => { if (pet && !pet.dead) dio.current?.revivePet(); }, [pet?.dead]);
 
   const recipe = a?.kind === 'craft' ? data.recipes[a.recipe] : undefined;
   const node = a?.kind === 'gather' ? data.nodes[a.node] : undefined;
@@ -372,10 +443,18 @@ export function BagsPanel({ s, data }: P) {
   const count = sel !== null ? s.inventory[sel] ?? 0 : 0;
   const junkValue = items.filter(([id]) => data.items[id].quality === 0).reduce((a, [id, n]) => a + data.items[id].sellPrice * n, 0);
   const { bar, groups } = useItemFilter(data, items.map(([id]) => id));
+  const space = bagSpace(s, data);
   return (
     <div className="panel">
-      <div className="panel-head"><h3>Bags</h3><span className="muted">{items.length} item types</span><span className="spacer" />
+      <div className="panel-head"><h3>Bags</h3><span className={space.used >= space.total ? 'bad' : 'muted'}>{space.used}/{space.total} slots{space.special.map((b, i) => ` · ${b.used}/${b.slots} ${b.family & 3 ? 'ammo' : 'special'}`).join('')}</span><span className="spacer" />
         {junkValue > 0 && <button className="btn secondary small" onClick={() => game.command({ name: 'sellJunk' })}>Sell junk (<Money copper={junkValue} />)</button>}</div>
+      <div className="bag-slots">{[0, 1, 2, 3].map(i => {
+        const id = s.bags?.[i];
+        return id ? (
+          <div key={i} className="slot" title="Take off" onClick={() => game.command({ name: 'unequipBag', slot: i })}
+            {...withTip(() => <><ItemTooltip item={data.items[id]} data={data} /><div className="t-muted">{data.items[id]?.bagSlots} slots · click to take off</div></>)}><ItemIcon id={id} data={data} /></div>
+        ) : <div key={i} className="slot empty" title="Empty bag slot: equip a bag from your bags" />;
+      })}{space.used >= space.total && <span className="bad" style={{ fontSize: 12 }}>Your bags are full: loot is left behind and gathering stops.</span>}</div>
       {items.length > 0 && bar}
       {groups.map(([cat, ids]) => (
         <div key={cat}>
@@ -392,7 +471,7 @@ export function BagsPanel({ s, data }: P) {
         <div className="card" style={{ marginTop: 12, maxWidth: 520 }}>
           <div className="row"><ItemIcon id={it.id} data={data} size="lg" /><div><div className={`title q${it.quality}`}>{it.name}</div><div className="meta">You have {count}</div></div></div>
           <div className="btn-row">
-            {equipSlots(it).length > 0 && <button className="btn" onClick={() => { game.command({ name: 'equip', item: it.id }); setSel(null); }}>Equip</button>}
+            {(equipSlots(it).length > 0 || !!it.bagSlots) && <button className="btn" onClick={() => { game.command({ name: 'equip', item: it.id }); setSel(null); }}>{it.bagSlots ? `Equip bag (${it.bagSlots} slots)` : 'Equip'}</button>}
             {it.sellPrice > 0 && <button className="btn secondary" onClick={() => game.command({ name: 'sell', item: it.id, count: 1 })}>Sell 1 (<Money copper={it.sellPrice} />)</button>}
             {it.sellPrice > 0 && count > 1 && <button className="btn secondary" onClick={() => { game.command({ name: 'sell', item: it.id, count: count }); setSel(null); }}>Sell all (<Money copper={it.sellPrice * count} />)</button>}
           </div>
@@ -461,6 +540,25 @@ export function TownPage({ s, data }: P) {
 
 // ================================================================ log + settings
 
+const SOUND_SLIDERS: [keyof SoundSettings, string][] = [['master', 'Master'], ['effects', 'Effects'], ['voices', 'Creature voices'], ['music', 'Music'], ['ambience', 'Ambience']];
+
+/** Volumes, kept per browser (sound comes from your own client, converted the first time it plays). */
+function SoundPanel() {
+  const st = useSyncExternalStore(sound.subscribe, sound.getSettings);
+  return (
+    <div className="panel"><div className="panel-head"><h3>Sound</h3><span className="spacer" />
+      <label><input type="checkbox" checked={st.muted} onChange={e => sound.set({ muted: e.target.checked })} /> Mute</label></div>
+      <div className="sound-sliders">
+        {SOUND_SLIDERS.map(([k, label]) => (
+          <label key={k} className="muted">{label}
+            <input type="range" min={0} max={1} step={0.05} value={st[k] as number} disabled={st.muted}
+              onChange={e => sound.set({ [k]: +e.target.value } as Partial<SoundSettings>)} />
+            <span className="faint">{Math.round((st[k] as number) * 100)}%</span></label>))}
+      </div>
+    </div>
+  );
+}
+
 export function LogPage({ s }: P) {
   return (
     <>
@@ -476,9 +574,8 @@ export function LogPage({ s }: P) {
           Health only comes back on its own at 1 point per minute. Food from fishing, cooking and vendors is how you recover;
           without it you'll wait a long time between fights.
         </p>
-        <div>
-        </div>
       </div>
+      <SoundPanel />
       <div className="panel"><div className="panel-head"><h3>Account</h3></div>
         <p className="muted" style={{ marginTop: 0 }}>
           Logged in as <b>{game.account?.username}</b> on {game.serverUrl}. Your character lives on the guild server and keeps

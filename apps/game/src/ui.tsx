@@ -64,6 +64,7 @@ export function ItemTooltip({ item, data, count }: { item: ItemDef; data: GameDa
       {item.dmgMax > 0 && <div className="t-line">{item.dmgMin} - {item.dmgMax} Damage <span className="t-muted">Speed {(item.delayMs / 1000).toFixed(2)}</span></div>}
       {item.dmgMax > 0 && <div className="t-muted">({(((item.dmgMin + item.dmgMax) / 2) / (item.delayMs / 1000)).toFixed(1)} damage per second)</div>}
       {item.armor > 0 && <div className="t-line">{item.armor} Armor</div>}
+      {!!item.bagSlots && <div className="t-line">{item.bagSlots} Slot {item.bagFamily ? (item.class === 11 ? (item.subclass === 3 ? "Ammo Pouch" : "Quiver") : "Special Bag") : "Bag"}</div>}
       {item.stats.map(([t, v], i) => <div key={i} className="t-line">+{v} {STAT_NAMES[t] ?? `Stat ${t}`}</div>)}
       {item.food && <div className="t-green">Use: Restores {item.food.heal > 0 ? `${item.food.heal} health` : `${item.food.mana} mana`} over {item.food.durationMs / 1000} sec.</div>}
       {item.reqLevel > 1 && <div className="t-line">Requires Level {item.reqLevel}</div>}

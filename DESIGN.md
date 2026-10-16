@@ -37,6 +37,10 @@ Living document for the core systems. Sections marked *TBD* get filled in as eac
 | Dungeon time | **Characters are busy for the run** (its simulated length, tens of minutes), then the rewards arrive (Phase 5). |
 | Raid loot | **Targets**: each member picks up to two items from the raid's loot; a targeted drop goes to whoever targeted it (a roll among them, one per target per run); everything else is need-before-greed (Phase 6). |
 | Raid lockouts | **All raids reset every 3 days** (09:00 UTC); entering a raid saves you to it until then (Phase 6). |
+| Sound | **Everything from the client**: effects, creature voices, zone music and ambience, each with its own volume (Phase 7). |
+| Leveling pace | **About half of the earlier pace**: 1–60 takes roughly three weeks of idling; quests carry more of the experience (Phase 7). |
+| Pets and ranged | **Hunters shoot and tame a beast; warlocks summon demons** (Phase 7). |
+| Bags | **Slot limits**: a 16-slot backpack plus four bags (Phase 7). |
 
 ## Client data (Phase 0 recon, build 5875 enUS)
 
@@ -186,8 +190,10 @@ items need a standing.
 
 ### Known balance notes
 
-- Kill pace is quick (~220–350 kills/hour at level 1–5 with spells) next to vanilla. To revisit in
-  Phase 7, together with quest XP vs grinding.
+- Leveling pace (Phase 7, dev/pace.ts: a character in level-appropriate greens with food, at-level
+  mobs): finding the next mob takes 6–10 s, solo kills give 70% of their experience and quests 150%;
+  dungeon kills give full experience. A level takes minutes early on, 1.5–3.5 hours around 20–30 and
+  9–18 hours near 60 from kills alone; quests and dungeons shorten that.
 
 ## Server (`apps/server`, Phase 3)
 
@@ -383,7 +389,8 @@ raid frame.
 Balance (a hireling raid at level 60, dev/dungeon-balance.ts, 2 seeds each): tier 1 is clearable —
 Molten Core, Zul'Gurub and the Ruins clear every time, Onyxia about half the time. Blackwing Lair
 gets about a quarter of the way, the Temple about half (Viscidus and later), Naxxramas barely starts:
-those need players in real raid gear, resistances and consumables. Hired damage dealers are all mages.
+those need players in real raid gear, resistances and consumables. Hired damage dealers come in every
+class in turn (mage, rogue, warlock, hunter with a beast, warrior); with them, Onyxia clears every time too.
 
 ### Known gaps
 
@@ -392,15 +399,53 @@ those need players in real raid gear, resistances and consumables. Hired damage 
 - Raid attunements and the reputation turn-ins (Zandalar, Cenarion Circle, Brood of Nozdormu) aren't in.
 - Bosses that only appear through scripted events (Timmy the Cruel, Fras Siabi, Gahz'rilla) aren't in
   runs, and scripted encounters (VanCleef's adds, Balnazzar's transformation) are plain fights.
-- Lockpicking, pets (hunter/warlock), totems, poisons/imbues and crowd control aren't idleized yet;
-  hunters fight in melee until ranged weapons arrive.
+- Lockpicking, totems, poisons/imbues, wands and crowd control aren't idleized yet (rogues are the
+  weakest damage dealers without poisons); pets have no abilities or loyalty of their own.
 - Profession specializations (Elemental/Dragonscale, Gnomish/Goblin, ...) and their reputations.
 - Belts, bracers' own models and enchant glows aren't shown on characters; humanoid NPCs still use
   their baked body textures (their weapons aren't attached yet).
 - Environment-mapped overlay layers are skipped; global-sequence tracks are held at their first key;
   hermite/bezier keys play linearly.
-- Bags have no slot limit yet.
 - The launcher exe isn't code-signed, so Windows SmartScreen warns on first run.
+
+## Polish (Phase 7)
+
+**Sound.** Sound comes from each player's own client like the art: the game asks for
+`sounds/<SoundEntries id>.json` (the entry's variations and volume) and the files are copied out of the
+sound archives on first use (1.12 ships plain PCM WAV and MP3, which browsers play as they are). Only ids
+go into the game data: zone music and ambience (AreaTable → ZoneMusic / SoundAmbience, day and night),
+creature voices (CreatureDisplayInfo or its model → CreatureSoundData: aggro, attack, wound, death), spell
+and boss-ability sounds (Spell → SpellVisual → SpellVisualKit), recipe sounds, gathering sounds and
+interface sounds by name, and weapon impacts by weapon type. The client plays them on Web Audio with one
+gain per channel (effects, creature voices, music, ambience) under a master volume, set on the Log &
+Settings page and kept per browser. Music plays a track, rests for 45–120 s, plays another; ambience
+loops. Effects stay quiet while the tab is hidden; music and ambience keep playing. Browsers only allow
+audio after a click, so the game is silent until the first one. Dungeon and raid replays play boss
+abilities, voices and hits too. NPC greetings aren't played (vendors and trainers have no scene).
+
+**Leveling pace.** See *Known balance notes*.
+
+**Hunters and warlocks.** A hunter with a bow, gun or crossbow and the right ammo in the bags shoots:
+ranged attack power is level × 2 + Agility × 2 − 10 plus Aspect of the Hawk, and the ammo's damage per
+second is added; every shot uses one arrow or bullet. Ranged spells (Arcane Shot, Multi-Shot, Aimed Shot,
+Serpent Sting) need that. From level 10 a hunter tames a beast that lives in the current zone (any beast
+of their level or lower, not elites) from the creature list; it holds the mob while the hunter keeps
+shooting. Without a pet the hunter gets a few opening shots before the mob arrives, then fights in melee.
+Warlocks get their demons as they level: Imp (1, Firebolt, ignores armor), Voidwalker (10, holds the mob),
+Succubus (20), Felhunter (30); the Voidwalker is summoned by default, or any known demon can be picked.
+Pets are scaled from the median ordinary mob of the owner's level, fight on a 2-second swing, take the
+mob's hits if they tank, and heal fully between fights; a dead pet costs 10 seconds before the next fight.
+Pets show beside the player in the scene, with their own swings and floating damage.
+
+**Bags.** A 16-slot backpack plus four bag slots; every stack takes a slot. Quivers, ammo pouches,
+soul and herb bags hold only items of their family (they're used first for those). Loot that doesn't fit
+is left on the corpse; gathering, fishing and crafting stop when the bags are full; vendors, the guild
+bank, guild requests and crafting orders refuse what doesn't fit. Quest rewards and dungeon loot always
+arrive (the bags can then be over full). Characters from before the limit got four bags for their level.
+
+**Small things.** Toasts for level-ups and for why an action stopped (full bags, no reagents), the
+browser tab title shows what the character is doing, and the game data is revalidated instead of
+downloaded again on every start.
 
 ## Launcher (`apps/launcher`)
 

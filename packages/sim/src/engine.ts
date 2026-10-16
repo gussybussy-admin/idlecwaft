@@ -2,6 +2,8 @@
 // one discrete event at a time, using only the RNG stored in the state: same state + same target
 // time = same result, which is what lets the server simulate and clients replay.
 import type { CreatureDef, GameData, ItemDef, RecipeDef, SkillRank } from './data.js';
+import { equipBag, giveItems, roomFor } from './bags.js';
+import { activePet, HUNTER, PET_REVIVE_MS, petStats } from './pets.js';
 import { factionOfRace } from './data.js';
 import { discoverTaxis, planTravel, RIDING } from './travel.js';
 import {
@@ -22,7 +24,9 @@ import {
 } from './state.js';
 
 export const OFFLINE_CAP_MS = 24 * 60 * 60 * 1000;
-export const SEARCH_MS: [number, number] = [2500, 4500]; // finding the next mob
+export const SEARCH_MS: [number, number] = [6000, 10000]; // finding the next mob
+/** Solo kills give this share of their experience; quests make up the rest (dungeons give it in full). */
+export const KILL_XP_RATE = 0.7;
 export const DEATH_MS = 30_000;                          // corpse run
 export const REVIVE_HP_FRACTION = 0.1;                   // health after resurrecting at your corpse
 export const GATHER_MS = 5000;                           // walk to the node + gather cast
@@ -35,7 +39,8 @@ export const SKINNING_KNIFE = 7005;
 
 export type SimEvent =
   | { t: number; type: 'spawn'; mob: Mob }
-  | { t: number; type: 'swing'; who: 'player' | 'mob'; result: 'hit' | 'crit' | 'miss' | 'dodge'; dmg: number; spell?: number }
+  | { t: number; type: 'swing'; who: 'player' | 'mob' | 'pet'; result: 'hit' | 'crit' | 'miss' | 'dodge'; dmg: number; spell?: number; ranged?: boolean; target?: 'pet' }
+  | { t: number; type: 'petdeath' }
   | { t: number; type: 'heal'; amount: number; spell: number; item?: number }
   | { t: number; type: 'kill'; creature: number; xp: number; gold: number; items: [number, number][] }
   | { t: number; type: 'death' }
@@ -131,6 +136,32 @@ export function playerStats(s: GameState, data: GameData): PlayerStats {
     dodge: Math.min(40, agi / 20 + sum('dodge', e => (e as { pct: number }).pct)),
     regenPerSec: healthRegenPerSec(spi),
   };
+}
+
+/** Ranged weapons that need ammo: bows and crossbows shoot arrows, guns shoot bullets. */
+const AMMO_FOR: Record<number, number> = { 2: 2, 18: 2, 3: 3 };
+
+export interface RangedStats { dmgMin: number; dmgMax: number; speedMs: number; rap: number; ammo: number; skill: number }
+
+/**
+ * A hunter's ranged attack: the bow, gun or crossbow, its ammo (the best you carry; one per shot) and
+ * ranged attack power (level x 2 + Agility x 2 - 10, plus Aspect of the Hawk). Null without one of them.
+ */
+export function rangedStats(s: GameState, data: GameData, agi: number): RangedStats | null {
+  if (s.char.cls !== HUNTER) return null;
+  const w = s.equipment.ranged ? data.items[s.equipment.ranged] : undefined;
+  if (!w || w.class !== 2 || !(w.subclass in AMMO_FOR)) return null;
+  let ammo: ItemDef | undefined;
+  for (const id of Object.keys(s.inventory)) {
+    const it = data.items[+id];
+    if (it?.class === 6 && it.subclass === AMMO_FOR[w.subclass] && it.reqLevel <= s.char.level && (s.inventory[+id] ?? 0) > 0
+      && (!ammo || it.dmgMin + it.dmgMax > ammo.dmgMin + ammo.dmgMax)) ammo = it;
+  }
+  if (!ammo) return null;
+  const rap = Math.max(0, s.char.level * 2 + agi * 2 - 10) + passives(s, data).rap;
+  const speedMs = w.delayMs || 2800;
+  const bonus = (rap / 14 + (ammo.dmgMin + ammo.dmgMax) / 2) * (speedMs / 1000);
+  return { dmgMin: Math.round(w.dmgMin + bonus), dmgMax: Math.round(w.dmgMax + bonus), speedMs, rap, ammo: ammo.id, skill: WEAPON_SKILL[w.subclass] ?? SKILL_UNARMED };
 }
 
 // ---------------------------------------------------------------- advance
@@ -284,10 +315,19 @@ function stepFight(s: GameState, data: GameData, creatureId: number, emit: Emit)
     return;
   }
   if (ph.p === 'search') {
+    const pet = activePet(s);
+    if (pet?.dead) {
+      // Revive Pet / summon a new demon before the next fight.
+      pet.dead = false;
+      s.phase = { p: 'search', from: s.now, until: s.now + PET_REVIVE_MS };
+      return;
+    }
     const level = int(s.rng, def.levelMin, def.levelMax);
     const hp = def.stats[level - def.levelMin].hp;
     const mob: Mob = { id: def.id, level, hp, maxHp: hp };
-    s.phase = { p: 'combat', mob, playerSwingAt: s.now + 300, mobSwingAt: s.now + 800, decideAt: s.now + 100 };
+    s.phase = { p: 'combat', mob, playerSwingAt: s.now + 300, mobSwingAt: s.now + 800, decideAt: s.now + 100,
+      ...(pet ? { petHp: petStats(s, data, pet).maxHp, petSwingAt: s.now + 1200 } : {}),
+      ...(s.char.cls === HUNTER ? { openUntil: s.now + 3000 } : {}) };
     emit({ t: s.now, type: 'spawn', mob: { ...mob } });
     return;
   }
@@ -316,15 +356,24 @@ function stepFight(s: GameState, data: GameData, creatureId: number, emit: Emit)
 
   const mob = ph.mob;
   const stats = def.stats[mob.level - def.levelMin];
+  const pet = activePet(s);
+  const pst = pet && (ph.petHp ?? 0) > 0 ? petStats(s, data, pet) : null;
+  // Hunters shoot while their pet holds the mob (or before it reaches them), with a ranged weapon and ammo.
+  const rs = rangedStats(s, data, st.agi);
+  const ranged = !!rs && (!!pst?.tank || s.now < (ph.openUntil ?? 0));
   const ctx: CombatCtx = {
     data, def,
-    st: { dmgMin: st.dmgMin, dmgMax: st.dmgMax, speedMs: st.speedMs, crit: st.crit, spellCrit: st.spellCrit, meleeHit: st.meleeHit,
-      spellHit: st.spellHit, ap: st.ap, int: st.int, spi: st.spi, level: s.char.level, maxHp: st.maxHp },
+    st: { dmgMin: ranged ? rs!.dmgMin : st.dmgMin, dmgMax: ranged ? rs!.dmgMax : st.dmgMax, speedMs: ranged ? rs!.speedMs : st.speedMs,
+      crit: st.crit, spellCrit: st.spellCrit, meleeHit: st.meleeHit,
+      spellHit: st.spellHit, ap: ranged ? rs!.rap : st.ap, int: st.int, spi: st.spi, level: s.char.level, maxHp: st.maxHp },
+    ranged,
+    useAmmo: () => { if (rs) addItem(s, rs.ammo, -1); },
+    ...(pst ? { pet: { dmgMin: pst.dmgMin, dmgMax: pst.dmgMax, speedMs: pst.speedMs, ignoresArmor: pet!.kind === 'imp' } } : {}),
     talents: activeTalentEffects(s, data),
-    emitSwing: (who, result, dmg, spell) => emit({ t: s.now, type: 'swing', who, result, dmg, ...(spell ? { spell } : {}) }),
+    emitSwing: (who, result, dmg, spell) => emit({ t: s.now, type: 'swing', who, result, dmg, ...(spell ? { spell } : {}), ...(ranged && who === 'player' ? { ranged: true } : {}) }),
     emitHeal: (amount, spell) => emit({ t: s.now, type: 'heal', amount, spell }),
     raiseWeaponSkill: () => {
-      const wskill = weaponSkillId(s, data);
+      const wskill = ranged ? rs!.skill : weaponSkillId(s, data);
       const skill = s.combatSkills[wskill] ?? 1;
       raiseCombatSkill(s, wskill, emit);
       return skill;
@@ -334,8 +383,33 @@ function stepFight(s: GameState, data: GameData, creatureId: number, emit: Emit)
   if (outcome === 'killed') return onKill(s, data, def, mob, emit);
   if (outcome !== 'mob-swing') return;
 
-  // The mob swings: its weapon skill (5 per level) against your Defense, which rises as you're attacked.
   const r = s.rng;
+  // A tanking pet takes the hits while it lives.
+  if (pst?.tank && pet) {
+    const mods = mobMods(ph, def.attackMs);
+    const roll = int(r, 0, 9999) / 100;
+    const miss = missChance(mob.level * 5, s.char.level * 5);
+    let dmg = 0, result: 'hit' | 'crit' | 'miss' | 'dodge' = 'hit';
+    if (roll < miss) result = 'miss';
+    else if (roll < miss + 5) result = 'dodge';
+    else {
+      dmg = Math.max(1, int(r, stats.dmgMin, stats.dmgMax) + mods.dmgDelta);
+      if (chance(r, 5)) { result = 'crit'; dmg *= 2; }
+      dmg = Math.max(1, Math.round(dmg * (1 - armorReduction(pst.armor, mob.level))));
+    }
+    ph.petHp = (ph.petHp ?? 0) - dmg;
+    ph.mobSwingAt = s.now + mods.attackMs;
+    emit({ t: s.now, type: 'swing', who: 'mob', result, dmg, target: 'pet' });
+    if (ph.petHp <= 0) {
+      ph.petHp = 0;
+      pet.dead = true;
+      log(s, 'death', `${pet.name} was slain by ${def.name}.`);
+      emit({ t: s.now, type: 'petdeath' });
+    }
+    ph.decideAt = Math.min(ph.decideAt ?? Infinity, s.now);
+    return;
+  }
+  // The mob swings: its weapon skill (5 per level) against your Defense, which rises as you're attacked.
   let result: 'hit' | 'crit' | 'miss' | 'dodge', dmg = 0;
   const defense = s.combatSkills[SKILL_DEFENSE] ?? 1;
   const miss = missChance(mob.level * 5, defense);
@@ -404,13 +478,14 @@ function raiseCombatSkill(s: GameState, skill: number, emit: Emit): void {
 
 function onKill(s: GameState, data: GameData, def: CreatureDef, mob: Mob, emit: Emit): void {
   s.char.rage = 0; // rage fades out of combat
-  const xp = s.char.level < data.maxLevel ? killXp(s.char.level, mob.level, def.rank) : 0;
+  const xp = s.char.level < data.maxLevel ? Math.round(killXp(s.char.level, mob.level, def.rank) * KILL_XP_RATE) : 0;
   const gold = def.goldMax ? int(s.rng, def.goldMin, def.goldMax) : 0;
-  const drops = rollLoot(data, def.loot, s.rng, neededQuestItems(s, data));
+  const rolled = rollLoot(data, def.loot, s.rng, neededQuestItems(s, data));
   s.gold += gold;
-  for (const [i, n] of drops) addItem(s, i, n);
+  const { got, lost } = giveItems(s, data, rolled);
   s.stats.kills[def.id] = (s.stats.kills[def.id] ?? 0) + 1;
-  const items = [...drops];
+  const items = got;
+  if (lost.length) log(s, 'info', `Your bags are full: ${lost.map(([i]) => data.items[i]?.name ?? i).join(', ')} left on the corpse.`);
   emit({ t: s.now, type: 'kill', creature: def.id, xp, gold, items });
   if (items.length) log(s, 'loot', `${def.name}: ${items.map(([i, n]) => `${data.items[i]?.name ?? i}${n > 1 ? ` x${n}` : ''}`).join(', ')}`);
   maybeSkin(s, data, def, mob, emit);
@@ -428,10 +503,9 @@ function maybeSkin(s: GameState, data: GameData, def: CreatureDef, mob: Mob, emi
   if (!def.skin || !sk?.max || !s.settings.autoSkin || !hasItem(s, SKINNING_KNIFE)) return;
   const req = skinningReq(mob.level);
   if (sk.level < req) return;
-  const drops = rollLoot(data, def.skin, s.rng);
-  for (const [i, n] of drops) addItem(s, i, n);
+  const { got: drops } = giveItems(s, data, rollLoot(data, def.skin, s.rng));
   s.stats.skinned++;
-  emit({ t: s.now, type: 'harvest', skill: 'skinning', items: [...drops] });
+  emit({ t: s.now, type: 'harvest', skill: 'skinning', items: drops });
   skillUp(s, 'skinning', SKILLUP_CHANCE[gatherColor(sk.level, req)], emit);
 }
 
@@ -533,12 +607,12 @@ function stepGather(s: GameState, data: GameData, nodeId: number, emit: Emit): v
     s.phase = { p: 'work', from: s.now, until: s.now + GATHER_MS };
     return;
   }
-  const drops = rollLoot(data, node.loot, s.rng);
-  for (const [i, n] of drops) addItem(s, i, n);
+  const { got: drops, lost } = giveItems(s, data, rollLoot(data, node.loot, s.rng));
   s.stats.gathered++;
-  emit({ t: s.now, type: 'harvest', skill: node.skill, items: [...drops] });
+  emit({ t: s.now, type: 'harvest', skill: node.skill, items: drops });
   skillUp(s, node.skill, SKILLUP_CHANCE[gatherColor(s.skills[node.skill].level, node.reqSkill)], emit);
   s.phase = { p: 'idle' };
+  if (lost.length) return stop(s, 'Your bags are full.', emit);
 }
 
 function stepFish(s: GameState, data: GameData, emit: Emit): void {
@@ -551,11 +625,11 @@ function stepFish(s: GameState, data: GameData, emit: Emit): void {
   }
   const skill = s.skills.fishing.level;
   if (zone?.fishing && chance(s.rng, fishingCatchChance(skill, zone.fishing.zoneSkill))) {
-    const drops = rollLoot(data, zone.fishing.loot, s.rng);
-    for (const [i, n] of drops) addItem(s, i, n);
+    const { got: drops, lost } = giveItems(s, data, rollLoot(data, zone.fishing.loot, s.rng));
     s.stats.caught++;
-    emit({ t: s.now, type: 'harvest', skill: 'fishing', items: [...drops] });
+    emit({ t: s.now, type: 'harvest', skill: 'fishing', items: drops });
     skillUp(s, 'fishing', fishingSkillupChance(skill), emit);
+    if (lost.length) { s.phase = { p: 'idle' }; return stop(s, 'Your bags are full.', emit); }
   } else {
     emit({ t: s.now, type: 'escape' });
   }
@@ -577,6 +651,10 @@ function stepCraft(s: GameState, data: GameData, recipeId: number, emit: Emit): 
   const err = canCraft(s, data, recipeId, a.slot);
   if (err) return stop(s, err, emit);
   for (const [i, n] of r.reagents) addItem(s, i, -n);
+  if (r.item && roomFor(s, data, r.item) < r.count) {
+    for (const [i, n] of r.reagents) addItem(s, i, n);
+    return stop(s, 'Your bags are full.', emit);
+  }
   if (r.enchant) {
     const slot = enchantSlot(s, data, r, a.slot)!;
     s.enchants[slot] = r.enchant.id;
@@ -853,6 +931,7 @@ export function buy(s: GameState, data: GameData, item: number, count = 1): Comm
   }
   const cost = it.buyPrice * count;
   if (s.gold < cost) return fail(`Costs ${formatMoney(cost)}.`);
+  if (roomFor(s, data, item) < count) return fail('Your bags are full.');
   s.gold -= cost;
   addItem(s, item, count);
   return ok;
@@ -886,6 +965,7 @@ export function proficiencyFor(it: ItemDef): number | null {
 }
 
 export function equip(s: GameState, data: GameData, item: number): CommandResult {
+  if (data.items[item]?.bagSlots) return equipBag(s, data, item);
   const it = data.items[item];
   if (!it || !hasItem(s, item)) return fail("You don't have that.");
   const slots = equipSlots(it);

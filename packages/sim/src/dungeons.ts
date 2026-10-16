@@ -25,6 +25,8 @@ export interface CreatureAbility {
   firstMs: [number, number]; repeatMs: [number, number];
   chance: number;
   effects: AbilityEffect[];
+  /** Its sound (SoundEntries id), when the client has one. */
+  sound?: number;
 }
 
 /** One pull: a trash pack, or a boss (with any adds in `mobs`). */

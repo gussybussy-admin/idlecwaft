@@ -11,6 +11,7 @@ import { DungeonsPage } from './dungeons.js';
 import { Bar, fmtTime, hideTip, Icon, ItemIcon, Money, TooltipHost } from './ui.js';
 import { randomLook, type Look } from './character.js';
 import { Diorama } from './diorama.js';
+import { isDay, sound } from './sound.js';
 
 /** A small turntable of the character being created, using the same diorama as combat. */
 function CharacterPreview({ look }: { look: Look }) {
@@ -22,6 +23,38 @@ function CharacterPreview({ look }: { look: Look }) {
 }
 
 const CRAFTING: Profession[] = ['cooking', 'firstaid', 'alchemy', 'blacksmithing', 'enchanting', 'engineering', 'leatherworking', 'tailoring'];
+/**
+ * Sounds that belong to the whole game rather than a scene: the zone's music and ambience (day or night),
+ * level-ups, quests, and the page tabs.
+ */
+function SoundDirector({ s, data, page }: { s: GameState; data: GameData; page: string }) {
+  const zone = data.zones.find(z => z.id === s.zone)?.sound;
+  const [day, setDay] = useState(isDay());
+  useEffect(() => { const t = setInterval(() => setDay(isDay()), 60_000); return () => clearInterval(t); }, []);
+  const music = zone?.music?.[day ? 0 : 1] ?? 0, ambience = zone?.ambience?.[day ? 0 : 1] ?? 0;
+  useEffect(() => { sound.zone(music, ambience); }, [music, ambience]);
+  useEffect(() => game.onEvent(e => {
+    const ui = data.sounds?.ui;
+    if (e.type === 'levelup') { sound.play(ui?.levelUp); game.showToast(`You reached level ${e.level}!`); }
+    else if (e.type === 'quest') sound.play(ui?.questComplete);
+    else if (e.type === 'stop' && e.reason) game.showToast(e.reason);
+  }), [data]);
+  // The browser tab says what you're doing, so it reads at a glance among other tabs.
+  const a = s.action;
+  const doing = !a ? 'Idle' : a.kind === 'fight' ? `Fighting ${data.creatures[a.creature]?.name ?? ''}`
+    : a.kind === 'gather' ? `${data.nodes[a.node]?.skill === 'mining' ? 'Mining' : 'Gathering'} ${data.nodes[a.node]?.name ?? ''}`
+    : a.kind === 'fish' ? 'Fishing' : a.kind === 'craft' ? `Making ${data.recipes[a.recipe]?.name ?? ''}`
+    : a.kind === 'travel' ? 'Travelling' : a.kind === 'quest' ? 'Questing' : a.kind === 'dungeon' ? `In ${data.dungeons[a.dungeon]?.name ?? 'a dungeon'}` : 'Busy';
+  useEffect(() => { document.title = `${s.phase.p === 'dead' ? 'Dead' : doing} · Lv ${s.char.level} · World of Idlecraft`; }, [doing, s.char.level, s.phase.p]);
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    const ui = data.sounds?.ui;
+    sound.play(page === 'bags' ? ui?.bag : page === 'spells' || page === 'talents' ? ui?.spellbook : ui?.tab, 'effects', 0.6);
+  }, [page]);
+  return null;
+}
+
 type Page = 'combat' | Profession | 'character' | 'spells' | 'talents' | 'quests' | 'reputation' | 'dungeons' | 'bags' | 'town' | 'travel' | 'guild' | 'log';
 
 export function App() {
@@ -41,6 +74,7 @@ export function App() {
   return (
     <div className="app">
       <Sidebar s={s} data={data} page={page} setPage={setPage} />
+      <SoundDirector s={s} data={data} page={page} />
       <main className="main"><div className="main-inner">
         {page === 'guild' && <GuildPage s={s} data={data} g={g} />}
         {page === 'combat' && <CombatPage s={s} data={data} />}

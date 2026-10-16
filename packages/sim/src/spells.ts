@@ -53,6 +53,8 @@ export interface SpellDef {
   /** Only usable right after something happened (Overpower after a dodge, Revenge after you avoid a hit, Execute below 20%). */
   requires?: 'target-dodged' | 'self-avoided' | 'target-below-20';
   effects: SpellEffect[];
+  /** Cast and impact sounds (SoundEntries ids). */
+  sound?: { cast?: number; impact?: number };
 }
 
 export interface ClassSpellOffer { spell: number; level: number; cost: Copper }

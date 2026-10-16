@@ -1,8 +1,10 @@
 // Player save state. Plain JSON: the server (Phase 3) stores exactly this.
 import type { GameData } from './data.js';
+import { starterBag } from './bags.js';
 import { seedRng, type RngState } from './rng.js';
 import type { CombatPhase } from './combat.js';
 import type { QuestProgress } from './quests.js';
+import type { Pet } from './pets.js';
 
 export type Profession =
   | 'mining' | 'herbalism' | 'skinning' | 'fishing' | 'cooking' | 'firstaid'
@@ -89,6 +91,10 @@ export interface GameState {
   rep: Record<number, number>;
   action: Action | null;
   phase: Phase;
+  /** The four bag slots (container item ids). */
+  bags?: (number | null)[];
+  /** A hunter's tamed beast or a warlock's chosen demon. */
+  pet?: Pet;
   settings: { autoEat: boolean; eatBelowPct: number; restBelowPct: number; autoSkin: boolean; potionBelowPct: number };
   stats: { kills: Record<number, number>; deaths: number; gathered: number; caught: number; cooked: number; crafted: number; skinned: number };
   log: LogEntry[];
@@ -113,6 +119,7 @@ export function newGame(data: GameData, c: NewCharacter): GameState {
     talents: {},
     quests: {}, questsDone: [], rep: {},
     action: null, phase: { p: 'idle' },
+    bags: [null, null, null, null],
     settings: { autoEat: true, eatBelowPct: 50, restBelowPct: 60, autoSkin: true, potionBelowPct: 35 },
     stats: { kills: {}, deaths: 0, gathered: 0, caught: 0, cooked: 0, crafted: 0, skinned: 0 },
     log: [],
@@ -131,8 +138,10 @@ export function newGame(data: GameData, c: NewCharacter): GameState {
 }
 
 /** Brings saves from older data versions up to date (new fields get their defaults). */
-export function migrateState(s: GameState): GameState {
+export function migrateState(s: GameState, data?: GameData): GameState {
   s.taxi ??= [];
+  // Characters from before bag limits get four bags for their level, so nobody is suddenly full.
+  if (!s.bags && data) { const b = starterBag(data, s.char.level); s.bags = [b, b, b, b]; }
   s.riding ??= 0;
   // Characters from before weapon skills: start them at their level's cap, as if they'd always had them.
   s.combatSkills ??= { 95: s.char.level * 5, 162: s.char.level * 5 };
