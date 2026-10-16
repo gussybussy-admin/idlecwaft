@@ -2,6 +2,9 @@
 // one discrete event at a time, using only the RNG stored in the state: same state + same target
 // time = same result, which is what lets the server simulate and clients replay.
 import type { CreatureDef, GameData, ItemDef, RecipeDef, SkillRank } from './data.js';
+import { poisons, SEARING_MS, STREAM_MS, totems } from './classes.js';
+/** Spell ids shown for totem damage and healing (Searing Totem, Healing Stream). */
+const TOTEM_SEARING = 3599, TOTEM_STREAM = 5394;
 import { equipBag, giveItems, roomFor } from './bags.js';
 import { activePet, HUNTER, PET_REVIVE_MS, petStats } from './pets.js';
 import { factionOfRace } from './data.js';
@@ -103,6 +106,7 @@ export function playerStats(s: GameState, data: GameData): PlayerStats {
   }
   // Known self buffs (Battle Shout, Arcane Intellect, Fortitude, Devotion Aura, ...) are always on.
   const p = passives(s, data);
+  str += (totems(s)?.strength ?? 0); // Strength of Earth Totem
   str += p.str; agi += p.agi; sta += p.sta; int_ += p.int; spi += p.spi;
   // Talents: flat stats first, then percentages (Strength of the Earth-style % talents multiply the total).
   const tal = activeTalentEffects(s, data);
@@ -141,15 +145,22 @@ export function playerStats(s: GameState, data: GameData): PlayerStats {
 /** Ranged weapons that need ammo: bows and crossbows shoot arrows, guns shoot bullets. */
 const AMMO_FOR: Record<number, number> = { 2: 2, 18: 2, 3: 3 };
 
-export interface RangedStats { dmgMin: number; dmgMax: number; speedMs: number; rap: number; ammo: number; skill: number }
+export interface RangedStats { dmgMin: number; dmgMax: number; speedMs: number; rap: number; ammo: number; skill: number; wand?: boolean }
+/** Wands (weapon subclass 19), and the classes that use them. */
+const WAND = 19;
+const WAND_CLASSES = new Set([5, 8, 9]);
 
 /**
  * A hunter's ranged attack: the bow, gun or crossbow, its ammo (the best you carry; one per shot) and
  * ranged attack power (level x 2 + Agility x 2 - 10, plus Aspect of the Hawk). Null without one of them.
  */
 export function rangedStats(s: GameState, data: GameData, agi: number): RangedStats | null {
-  if (s.char.cls !== HUNTER) return null;
   const w = s.equipment.ranged ? data.items[s.equipment.ranged] : undefined;
+  // Casters shoot their wand instead of meleeing: magic damage, no ammo.
+  if (WAND_CLASSES.has(s.char.cls) && w?.class === 2 && w.subclass === WAND) {
+    return { dmgMin: w.dmgMin, dmgMax: w.dmgMax, speedMs: w.delayMs || 1500, rap: 0, ammo: 0, skill: WEAPON_SKILL[WAND] ?? SKILL_UNARMED, wand: true };
+  }
+  if (s.char.cls !== HUNTER) return null;
   if (!w || w.class !== 2 || !(w.subclass in AMMO_FOR)) return null;
   let ammo: ItemDef | undefined;
   for (const id of Object.keys(s.inventory)) {
@@ -328,6 +339,14 @@ function stepFight(s: GameState, data: GameData, creatureId: number, emit: Emit)
     s.phase = { p: 'combat', mob, playerSwingAt: s.now + 300, mobSwingAt: s.now + 800, decideAt: s.now + 100,
       ...(pet ? { petHp: petStats(s, data, pet).maxHp, petSwingAt: s.now + 1200 } : {}),
       ...(s.char.cls === HUNTER ? { openUntil: s.now + 3000 } : {}) };
+    // A shaman's totems go down as the fight starts: Searing Totem burns the mob, Healing Stream heals you.
+    const tt = totems(s);
+    if (tt && s.phase.p === 'combat') {
+      const dots = (s.phase.dots ??= []);
+      if (tt.searing) dots.push({ chain: TOTEM_SEARING, perTick: 0, ampMs: SEARING_MS, next: s.now + SEARING_MS, until: s.now + 600_000, channel: true,
+        base: tt.searing.min, dice: tt.searing.max - tt.searing.min, spell: TOTEM_SEARING });
+      if (tt.stream) dots.push({ chain: TOTEM_STREAM, perTick: tt.stream, ampMs: STREAM_MS, next: s.now + STREAM_MS, until: s.now + 600_000, heal: true, spell: TOTEM_STREAM });
+    }
     emit({ t: s.now, type: 'spawn', mob: { ...mob } });
     return;
   }
@@ -360,14 +379,16 @@ function stepFight(s: GameState, data: GameData, creatureId: number, emit: Emit)
   const pst = pet && (ph.petHp ?? 0) > 0 ? petStats(s, data, pet) : null;
   // Hunters shoot while their pet holds the mob (or before it reaches them), with a ranged weapon and ammo.
   const rs = rangedStats(s, data, st.agi);
-  const ranged = !!rs && (!!pst?.tank || s.now < (ph.openUntil ?? 0));
+  const ranged = !!rs && (rs.wand || !!pst?.tank || s.now < (ph.openUntil ?? 0));
   const ctx: CombatCtx = {
     data, def,
     st: { dmgMin: ranged ? rs!.dmgMin : st.dmgMin, dmgMax: ranged ? rs!.dmgMax : st.dmgMax, speedMs: ranged ? rs!.speedMs : st.speedMs,
       crit: st.crit, spellCrit: st.spellCrit, meleeHit: st.meleeHit,
       spellHit: st.spellHit, ap: ranged ? rs!.rap : st.ap, int: st.int, spi: st.spi, level: s.char.level, maxHp: st.maxHp },
     ranged,
-    useAmmo: () => { if (rs) addItem(s, rs.ammo, -1); },
+    useAmmo: () => { if (rs?.ammo) addItem(s, rs.ammo, -1); },
+    wand: ranged && !!rs?.wand,
+    poisons: poisons(s, data),
     ...(pst ? { pet: { dmgMin: pst.dmgMin, dmgMax: pst.dmgMax, speedMs: pst.speedMs, ignoresArmor: pet!.kind === 'imp' } } : {}),
     talents: activeTalentEffects(s, data),
     emitSwing: (who, result, dmg, spell) => emit({ t: s.now, type: 'swing', who, result, dmg, ...(spell ? { spell } : {}), ...(ranged && who === 'player' ? { ranged: true } : {}) }),

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   canFish, canGather, equipSlots, factionOfRace, fishingCatchChance, gatherColor, killXp, MAX_PRIMARY,
-  activePet, bagSpace, BANK_SLOTS, bankUsed, roomFor, DEMONS, HUNTER, knownDemons, petStats, rangedStats, TAME_LEVEL, tameError, WARLOCK, playerStats, PRIMARY_PROFESSIONS, rankTerms, REP_RANKS, PROFESSIONS, SKILL_NAME, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
+  activePet, EFFECT_NAMES, bagSpace, BANK_SLOTS, bankUsed, roomFor, DEMONS, HUNTER, knownDemons, petStats, rangedStats, TAME_LEVEL, tameError, WARLOCK, playerStats, PRIMARY_PROFESSIONS, rankTerms, REP_RANKS, PROFESSIONS, SKILL_NAME, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
 } from '@idle/sim';
 import { game } from './game.js';
 import { Diorama, type Activity } from './diorama.js';
@@ -159,7 +159,7 @@ export function ActionScene({ s, data, hint }: P & { hint?: string }) {
           }
           const target = e.who === 'mob' ? e.target ?? 'player' : 'mob';
           const cls = e.who === 'pet' ? 'player pet' : e.who;
-          if (e.result === 'hit' || e.result === 'crit') { d.wound(target, e.result === 'crit'); float(e.who, e.spell ? `${data.spells[e.spell]?.name ?? ''} ${e.dmg}` : String(e.dmg), `${cls} ${e.result === 'crit' ? 'crit' : ''} ${e.spell ? 'spell' : ''}`, target); }
+          if (e.result === 'hit' || e.result === 'crit') { d.wound(target, e.result === 'crit'); float(e.who, e.spell ? `${data.spells[e.spell]?.name ?? EFFECT_NAMES[e.spell] ?? ''} ${e.dmg}` : String(e.dmg), `${cls} ${e.result === 'crit' ? 'crit' : ''} ${e.spell ? 'spell' : ''}`, target); }
           else { if (e.result === 'dodge') d.dodge(target); float(e.who, e.result === 'miss' ? 'Miss' : 'Dodge', 'miss', target); }
           break;
         }

@@ -6,6 +6,10 @@ import { chance, int } from './rng.js';
 import { scaled, type SpellDef, type SpellEffect } from './spells.js';
 import { spellMods, type TalentEffect } from './talents.js';
 import type { GameState, Mob } from './state.js';
+import { DEADLY_CHANCE, DEADLY_MS, DEADLY_STACKS, INSTANT_CHANCE, type Poisons } from './classes.js';
+
+/** Spell ids shown for poison damage (Instant Poison VI, Deadly Poison V). */
+export const POISON_INSTANT = 11338, POISON_DEADLY = 11357;
 
 export const GCD_DEFAULT_MS = 1500;
 export const POWER_TICK_MS = 2000;
@@ -159,6 +163,10 @@ export interface CombatCtx {
   /** Shooting from range (hunters with a ranged weapon and ammo): st holds the ranged weapon's numbers. */
   ranged?: boolean;
   useAmmo?(): void;
+  /** Shooting a wand: magic damage, no armor. */
+  wand?: boolean;
+  /** A rogue's weapon poisons. */
+  poisons?: Poisons;
   /** Your pet's attack, while it lives. */
   pet?: { dmgMin: number; dmgMax: number; speedMs: number; ignoresArmor: boolean };
   emitHeal(amount: number, spell: number): void;
@@ -262,11 +270,31 @@ function playerSwing(s: GameState, ph: CombatPhase, ctx: CombatCtx): void {
   const crit = chance(s.rng, st.crit);
   if (crit) dmg *= 2;
   const stats = def.stats[mob.level - def.levelMin];
-  dmg = Math.max(1, Math.round(dmg * (1 - armorReduction(stats.armor, st.level))));
+  dmg = Math.max(1, Math.round(dmg * (ctx.wand ? 1 : 1 - armorReduction(stats.armor, st.level))));
   if (p.seal) dmg += Math.round(p.seal / 100 * (st.speedMs / 1000)); // seal of righteousness: holy damage per swing
   mob.hp -= dmg;
   if (s.char.cls === 1) s.char.rage = Math.min(RAGE_MAX, (s.char.rage ?? 0) + rageFrom(dmg, st.level, true));
   ctx.emitSwing('player', crit ? 'crit' : 'hit', dmg, queued?.id);
+  if (!ctx.ranged) applyPoisons(s, ph, ctx);
+}
+
+/** Weapon poisons: Instant Poison strikes for nature damage, Deadly Poison stacks a damage over time. */
+function applyPoisons(s: GameState, ph: CombatPhase, ctx: CombatCtx): void {
+  const p = ctx.poisons;
+  if (!p || ph.mob.hp <= 0) return;
+  if (p.instant && chance(s.rng, INSTANT_CHANCE)) {
+    const dmg = int(s.rng, p.instant.min, p.instant.max);
+    ph.mob.hp -= dmg;
+    ctx.emitSwing('player', 'hit', dmg, POISON_INSTANT);
+  }
+  if (p.deadly && chance(s.rng, DEADLY_CHANCE)) {
+    const dots = (ph.dots ??= []);
+    const cur = dots.find(d => d.chain === POISON_DEADLY);
+    const stacks = Math.min(DEADLY_STACKS, (cur ? Math.round(cur.perTick / (p.deadly.perStack / 4)) : 0) + 1);
+    const perTick = Math.round(p.deadly.perStack / 4 * stacks);
+    if (cur) { cur.perTick = perTick; cur.until = s.now + DEADLY_MS; }
+    else dots.push({ chain: POISON_DEADLY, perTick, ampMs: 3000, next: s.now + 3000, until: s.now + DEADLY_MS, spell: POISON_DEADLY });
+  }
 }
 
 /** Expected damage of a spell (for choosing), without rolling. */

@@ -352,7 +352,8 @@ const CORPSE_RUN_S = 90;      // after a wipe
 const RETRIES = 2;
 const ENRAGE_MS = 8000;       // frenzies and enrages are bursts (removed or run out), not permanent stacks
 const enraged = (mob: { enrage: number; enrageUntil: number }, t: number) => (t < mob.enrageUntil ? mob.enrage : 0);
-const CC_ACTIVE = 3;
+/** Who can crowd-control what (creature types): Polymorph, Sap, Fear, Freezing Trap, Shackle Undead, Hibernate. */
+const CC_TYPES: Record<number, number[] | 'any'> = { 8: [1, 7, 8], 4: [7], 9: 'any', 3: 'any', 5: [6], 11: [1, 2] };
 /** Who stands next to the boss: tanks, and damage dealers of melee classes (warrior, paladin, rogue). */
 const MELEE_CLASSES = new Set([1, 2, 4]);
 const inMelee = (s: Snapshot) => s.role === 'tank' || (s.role === 'dps' && MELEE_CLASSES.has(s.cls));        // mobs fighting at once; groups crowd-control the rest of a pack
@@ -406,7 +407,7 @@ export function simulateRun(data: GameData, dungeon: DungeonDef, rawSnaps: Snaps
       }
       if (!mobs.length) { cleared = true; break; }
       events.push({ t, k: 'pull', enc, mobs: mobs.map(m => ({ uid: m.uid, id: m.def.id, level: m.level, hp: m.maxHp })) });
-      cleared = fight(data, members, mobs, rng, t, events, (dt) => { t = dt; }, use);
+      cleared = fight(data, members, mobs, rng, t, events, (dt) => { t = dt; }, use, e.boss);
       for (const m of mobs) if (m.hp <= 0) {
         kills.push(m.def.id);
         gold += m.def.goldMax ? int(rng, m.def.goldMin, m.def.goldMax) : 0;
@@ -446,7 +447,7 @@ const resisted = (m: Member, school: number, level: number) =>
   school > 0 ? Math.min(0.75, ((m.snap.resist[school] ?? 0) / Math.max(1, level * 5)) * 0.75) : 0;
 
 function fight(data: GameData, members: Member[], mobs: Mob[], rng: RngState, start: number, events: RunEvent[], setT: (t: number) => void,
-  use: (member: number, item: number) => void): boolean {
+  use: (member: number, item: number) => void, boss?: number): boolean {
   const alive = () => members.filter(m => !m.dead);
   // Tanks: the first holds the boss (and the first mob); the others pick up the rest of the pack.
   const tanks = members.map((m, i) => (m.snap.role === 'tank' ? i : -1)).filter(i => i >= 0);
@@ -523,8 +524,17 @@ function fight(data: GameData, members: Member[], mobs: Mob[], rng: RngState, st
     });
 
     // ---- mobs act
-    // Crowd control: only the first CC_ACTIVE living mobs fight; the rest wait (sheeped, sapped, shackled).
-    const active = new Set(living.slice(0, CC_ACTIVE));
+    // Crowd control: each member who can hold a mob (Polymorph, Sap, Fear, Freezing Trap, Shackle Undead,
+    // Hibernate) holds one the first mob isn't; bosses are never controlled. The rest fight.
+    const active = new Set(living);
+    const ccers = members.filter(m => !m.dead && m.ccUntil <= t && CC_TYPES[m.snap.cls]);
+    for (const mob of living.slice(1).reverse()) {
+      if (mob.def.id === boss || mob.def.rank === 3) continue;
+      const k = ccers.findIndex(m => { const ok = CC_TYPES[m.snap.cls]!; return ok === 'any' || ok.includes(mob.def.type); });
+      if (k < 0) continue;
+      ccers.splice(k, 1);
+      active.delete(mob);
+    }
     for (const mob of mobs) {
       if (mob.hp <= 0 || !active.has(mob)) continue;
       const target = (): number => {

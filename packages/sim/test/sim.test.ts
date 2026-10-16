@@ -3,7 +3,7 @@ import {
   advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, planTravel, playerStats,
   rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, trainSpells, knownSpells,
   learnTalent, pointsSpent, modded, activeTalentEffects, resetTalents, resetCost,
-  disenchant, unlearnProfession, itemCategory, bagSpace, roomFor, equipBag, giveItem, activePet, rangedStats, dungeonLoot, nextReset, withRaidBuffs, groupRoles, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
+  disenchant, unlearnProfession, POISON_INSTANT, itemCategory, bagSpace, roomFor, equipBag, giveItem, activePet, rangedStats, dungeonLoot, nextReset, withRaidBuffs, groupRoles, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
   type GameState, type SimEvent,
 } from '../src/index.js';
 import { fixture } from './fixture.js';
@@ -799,5 +799,47 @@ describe('commands from the network', () => {
   it('accept selling a whole large stack at once', () => {
     expect(parseCommand({ name: 'sell', item: 3, count: 1450 })).toEqual({ name: 'sell', item: 3, count: 1450 });
     expect(parseCommand({ name: 'sell', item: 3, count: 0 })).toBeNull();
+  });
+});
+
+describe('poisons, totems and wands', () => {
+  const d = fixture();
+  for (const c of [4, 5, 7]) { d.classStats[c] = d.classStats[c === 5 ? 8 : 1]; d.levelStats[1][c] = d.levelStats[1][1]; }
+  d.spells[9101] = { ...d.spells[901], id: 9101, chain: 9101, name: 'Instant Poison', nextSwing: false, spellLevel: 20, effects: [{ k: 'conjure', item: 1, count: 1, perLevel: 0 }] };
+  d.items[50] = { ...d.items[1], id: 50, name: 'Test Wand', class: 2, subclass: 19, invType: 26, stack: 1, dmgMin: 20, dmgMax: 30, delayMs: 1500 };
+  const as = (cls: number, level: number) => {
+    const s = newGame(d, { name: 'Tester', race: 1, cls: 1, seed: 5, now: T0 });
+    s.char.cls = cls; s.char.level = level; s.char.hp = playerStats(s, d).maxHp; s.inventory[5] = 200;
+    return s;
+  };
+  const fightEvents = (s: GameState, ms = 10 * 60_000) => {
+    const events: SimEvent[] = [];
+    startAction(s, d, { kind: 'fight', creature: 100 });
+    advance(s, d, T0 + ms, e => events.push(e));
+    return events;
+  };
+  it('rogues who know Instant Poison poison their weapon hits', () => {
+    const s = as(4, 20);
+    s.spells = [9101];
+    const ev = fightEvents(s);
+    expect(ev.filter(e => e.type === 'swing' && e.spell === POISON_INSTANT && e.dmg >= 19 && e.dmg <= 25).length).toBeGreaterThan(3);
+    const plain = as(4, 20);
+    expect(fightEvents(plain).some(e => e.type === 'swing' && e.spell === POISON_INSTANT)).toBe(false);
+  });
+  it('shamans drop a Searing Totem and a Healing Stream, and Strength of Earth adds Strength', () => {
+    const s = as(7, 20);
+    const str0 = playerStats(as(1, 20), d).str;
+    expect(playerStats(s, d).str).toBe(str0 + 10);
+    const ev = fightEvents(s);
+    expect(ev.some(e => e.type === 'swing' && e.spell === 3599)).toBe(true);
+    expect(ev.some(e => e.type === 'heal' && e.spell === 5394)).toBe(true);
+  });
+  it('casters shoot their wand instead of meleeing', () => {
+    const s = as(5, 10);
+    s.equipment.ranged = 50;
+    const ev = fightEvents(s);
+    const swings = ev.filter(e => e.type === 'swing' && e.who === 'player' && !e.spell);
+    expect(swings.length).toBeGreaterThan(5);
+    expect(swings.every(e => e.type === 'swing' && e.ranged)).toBe(true);
   });
 });
