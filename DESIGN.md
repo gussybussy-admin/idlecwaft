@@ -247,13 +247,15 @@ restarts.
 ## Dungeons and the group simulation (Phase 5)
 
 **Dungeons from data.** The 5-man instances come from LFGDungeons.dbc (names, level ranges) matched to
-Map.dbc; their creatures are the VMaNGOS spawns on each instance map. Bosses are found, not listed:
-elites that spawn once and have at least two uncommon-or-better items that really drop (≥3%,
-following loot references). Instances with several runs are split into wings around each wing's
-final boss (Scarlet Monastery's four wings, Dire Maul East/West/North, Stratholme Live/Undead, Lower
+Map.dbc; their creatures are the VMaNGOS spawns on each instance map (hostile creatures that also
+talk, like Dire Maul's ogres, included). Bosses are found, not listed: elites that spawn once and show
+it in the data — a rare elite, an encounter script, a guaranteed gear drop (early bosses drop one item
+for sure), at least two uncommon-or-better items that really drop (≥3%, following loot references),
+or a quest item. Instances with several runs are split into wings around each wing's final boss and
+a few landmark bosses (Scarlet Monastery's four wings, Dire Maul East/West/North, Stratholme Live/Undead, Lower
 and Upper Blackrock Spire; UBRS is a 10-player run). A run is ordered from the entrance (the spawn
-farthest from the final boss) toward the final boss; trash is clustered into packs (18 yd) and up to
-four packs guard each boss. 25 runs from Ragefire Chasm to Scholomance; dungeon quests (type 81) are
+farthest from the final boss) toward the final boss; trash is clustered into packs (12 yd, at most
+four mobs) and up to four packs guard each boss. 25 runs from Ragefire Chasm to Scholomance; dungeon quests (type 81) are
 back, credited by runs.
 
 **Boss mechanics from data.** Each creature's VMaNGOS spell list (creature_spells: spell, target,
@@ -271,8 +273,10 @@ green/blue items their class can use at that level, at 80% power.
 
 **The fight.** 1-second steps. Damage dealers hit the focus target; the healer casts real heal ranks
 with cast times, mana (little regeneration while casting) and spell pushback; the tank holds the
-mobs — if the tank is dead, crowd-controlled or knocked back, mobs hit the healer (healing draws
-threat) or anyone. At most three mobs fight at once (the rest are crowd-controlled). Mob melee uses
+mobs (in Defensive Stance / Bear Form / Righteous Fury: 10% less damage taken) — if the tank is dead,
+crowd-controlled or knocked back, mobs hit the healer (healing draws threat) or anyone. Damage
+dealers kill crowd-controlling and healing casters first, then the weakest mob. At most three mobs
+fight at once (the rest are crowd-controlled). Mob melee uses
 the same miss/dodge/armor formulas as solo combat. Between pulls: 20 s walking, 15 s resting (full
 health and mana). A wiped pull is retried twice (90 s corpse run each); the third wipe ends the run.
 Result: whether it cleared, how far it got, its length, kills, per-member experience (kill XP × the
@@ -285,13 +289,18 @@ never roll. Trash gold is shared. Each member also rolls their own quest-only dr
 **Async play.** Members sign up on the guild's group board with a role their class can fill; the
 leader starts whenever they like (no one needs to be online). The server simulates the run at once
 and stores it; members are busy (`dungeon` action) for its simulated length, and the rewards
-arrive when it ends. Everyone can watch the run as a 3D replay: the party in their real looks and
-gear against the real creature models, with health bars, floating numbers and a combat log, at
-1×/4×/16×.
+arrive when it ends. The run's simulated length is real time, so it can be **watched live**: the
+replay locked to the real clock, the same moment for everyone, with the guild seeing who's watching
+(the start is announced in the feed). Late viewers catch up instantly. Afterwards it's a 3D replay
+at 1×/4×/16×. Both show the party in their real looks and gear against the real creature models,
+with health bars, floating numbers and a combat log.
 
-Balance (hireling-only groups, dev/dungeon-balance.ts): full groups clear most dungeons at level; with
-no healer or no tank most runs wipe early. The hardest level-60 runs (Scholomance, Lower Blackrock
-Spire, Stratholme Undead) need better-than-hireling gear. To revisit in Phase 7.
+Balance (hireling-only groups at level, dev/dungeon-balance.ts): full groups clear 22 of 26 runs
+(Shadowfang Keep and Blackfathom Deeps fall at their last boss, Maraudon and Lower Blackrock Spire
+part-way). Without a tank nearly everything wipes; without a healer everything from Razorfen Downs up
+wipes, while the softest early runs (Ragefire to the Scarlet Monastery wings) can be pushed through by
+five damage dealers. Hirelings wear greens below level 50 and greens/blues from 50. To revisit in
+Phase 7.
 
 ## Idleized content
 
@@ -329,9 +338,8 @@ From playing Phase 4 with the guild:
 
 ### Known gaps
 
-- Some dungeon bosses aren't detected (Rhahk'Zor, several in Zul'Farrak) because their loot is thin;
-  scripted encounters (VanCleef's adds, Balnazzar's transformation) are plain fights. Groups can't yet
-  be watched live by everyone at the same moment (the replay is available as soon as the run starts).
+- Bosses that only appear through scripted events (Timmy the Cruel, Fras Siabi, Gahz'rilla) aren't in
+  runs, and scripted encounters (VanCleef's adds, Balnazzar's transformation) are plain fights.
 - Lockpicking, pets (hunter/warlock), totems, poisons/imbues and crowd control aren't idleized yet;
   hunters fight in melee until ranged weapons arrive.
 - Profession specializations (Elemental/Dragonscale, Gnomish/Goblin, ...) and their reputations.

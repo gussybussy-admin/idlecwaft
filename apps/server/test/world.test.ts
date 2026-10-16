@@ -165,6 +165,12 @@ describe('dungeons', () => {
     expect(running.run!.members.filter(m => m.hireling)).toHaveLength(3);
     expect(running.run!.members.some(m => m.role === 'healer' && m.hireling)).toBe(true);
     expect(world.stateOf(lead)!.action?.kind).toBe('dungeon');
+    // Everyone can watch live together; the guild sees who's watching, and the start is announced.
+    world.watch(friend, running.run!.id, null);
+    expect(world.guildSnapshot().groups[0].run!.watching).toEqual(['Kim']);
+    world.watch(friend, null, running.run!.id);
+    expect(world.guildSnapshot().groups[0].run!.watching).toEqual([]);
+    expect(world.guildSnapshot().feed.some(f => /entered Test Hold/.test(f.text))).toBe(true);
     expect(world.command(lead, { name: 'stop' })).toEqual({ ok: false, error: "You're in a dungeon with your group." });
     const gold0 = world.stateOf(friend)!.gold; // (level 12 is the fixture's level cap, so no XP)
     clock.add(running.run!.ends - clock.get() + 1000);

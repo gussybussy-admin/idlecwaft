@@ -29,7 +29,7 @@ export function DungeonsPage({ s, data, g }: P) {
       {busy && (
         <div className="panel">
           <div className="panel-head"><h3>In {data.dungeons[busy.dungeon]?.name}</h3><span className="spacer" />
-            <button className="btn" onClick={() => setWatching(busy.run)}>Watch the run</button></div>
+            <button className="btn" onClick={() => setWatching(busy.run)}>Watch live</button></div>
           <Bar kind="work" value={Date.now() - (busy.until - (groups.find(x => x.run?.id === busy.run)?.run?.ends ?? busy.until) + (groups.find(x => x.run?.id === busy.run)?.run?.started ?? Date.now()))}
             max={Math.max(1, busy.until - (groups.find(x => x.run?.id === busy.run)?.run?.started ?? Date.now()))} label={`back in ${fmtTime(Math.max(0, busy.until - Date.now()))}`} />
         </div>
@@ -106,7 +106,7 @@ function GroupBoard({ s, data, groups, me, roles, watch }: { s: GameState; data:
               {over && r!.loot.length > 0 && <div className="row" style={{ gap: 4, flexWrap: 'wrap' }}>{r!.loot.map((l, i) => (
                 <span key={i} {...withTip(() => <><ItemTooltip item={data.items[l.item]} data={data} /><div className="t-muted">{l.winner ? `Won by ${l.winner}` : 'Nobody wanted it'}</div></>)}>
                   <ItemIcon id={l.item} data={data} size="sm" /></span>))}</div>}
-              {r && <div className="btn-row"><button className="btn secondary small" onClick={() => watch(r.id)}>{over ? 'Watch replay' : 'Watch'}</button></div>}
+              {r && <div className="btn-row"><button className="btn secondary small" onClick={() => watch(r.id)}>{over ? 'Watch replay' : 'Watch live'}</button></div>}
             </div>
           );
         })}
@@ -124,16 +124,25 @@ export function ReplayViewer({ data, run, onClose }: { data: GameData; run: numb
   const [rep, setRep] = useState<{ run: RunResult; snapshots: Snapshot[] } | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => { game.replay(run).then(r => (r ? setRep(r) : setFailed(true))); }, [run]);
+  // Let the guild see who's watching (and watch together while the run is live).
+  useEffect(() => { game.watch(run); return () => game.watch(null); }, [run]);
+  const summary = game.guild?.groups.find(x => x.run?.id === run)?.run;
   return (
     <div className="modal-back" onClick={onClose}>
       <div className="panel modal replay" onClick={e => e.stopPropagation()}>
-        {!rep ? <p className="muted">{failed ? "Couldn't load the replay." : 'Loading the replay…'}</p> : <ReplayPlayer data={data} rep={rep} onClose={onClose} />}
+        {!rep ? <p className="muted">{failed ? "Couldn't load the replay." : 'Loading the replay…'}</p> : <ReplayPlayer data={data} rep={rep} onClose={onClose} started={summary?.started ?? 0} ends={summary?.ends ?? 0} watching={summary?.watching ?? []} />}
       </div>
     </div>
   );
 }
 
-function ReplayPlayer({ data, rep, onClose }: { data: GameData; rep: { run: RunResult; snapshots: Snapshot[] }; onClose: () => void }) {
+function ReplayPlayer({ data, rep, onClose, started, ends, watching }: {
+  data: GameData; rep: { run: RunResult; snapshots: Snapshot[] }; onClose: () => void; started: number; ends: number; watching: string[];
+}) {
+  // Live: the run is still going, so everyone sees the same moment (the replay locked to the real clock).
+  const [live, setLive] = useState(() => !!started && game.serverNow < ends);
+  const liveRef = useRef(live);
+  liveRef.current = live;
   const host = useRef<HTMLDivElement>(null);
   const dio = useRef<GroupDiorama | null>(null);
   const { run, snapshots } = rep;
@@ -169,10 +178,26 @@ function ReplayPlayer({ data, rep, onClose }: { data: GameData; rep: { run: RunR
     const step = (now: number) => {
       const st = state.current;
       const dt = Math.min(250, now - last); last = now;
+      if (liveRef.current && game.serverNow >= ends) setLive(false);
       if (st.cursor < events.length) {
-        const nextT = events[st.cursor].t;
-        st.t = nextT - st.t > 5000 ? nextT : st.t + dt * speed; // walking and resting fly by
         const lines: string[] = [];
+        if (liveRef.current) {
+          const target = game.serverNow - started;
+          // Joining late: catch up without replaying minutes of animation, then show the latest pull.
+          if (target - st.t > 3000) {
+            let lastPull: Extract<RunEvent, { k: 'pull' }> | null = null;
+            while (st.cursor < events.length && events[st.cursor].t <= target - 1500) {
+              const e = events[st.cursor++];
+              apply(e, st, [], () => {}, true);
+              if (e.k === 'pull') lastPull = e;
+            }
+            if (lastPull) dio.current?.setMobs(lastPull.mobs.filter(m => (st.mobs.get(m.uid)?.hp ?? 0) > 0).map(m => ({ uid: m.uid, displayIds: data.creatures[m.id]?.displayIds ?? [] })));
+          }
+          st.t = target;
+        } else {
+          const nextT = events[st.cursor].t;
+          st.t = nextT - st.t > 5000 ? nextT : st.t + dt * speed; // walking and resting fly by
+        }
         while (st.cursor < events.length && events[st.cursor].t <= st.t) {
           const e = events[st.cursor++];
           apply(e, st, lines, float);
@@ -182,8 +207,8 @@ function ReplayPlayer({ data, rep, onClose }: { data: GameData; rep: { run: RunR
       }
       raf = requestAnimationFrame(step);
     };
-    const apply = (e: RunEvent, st: typeof state.current, lines: string[], fl: typeof float) => {
-      const g = dio.current;
+    const apply = (e: RunEvent, st: typeof state.current, lines: string[], fl: typeof float, quiet = false) => {
+      const g = quiet ? null : dio.current;
       switch (e.k) {
         case 'pull':
           st.pull = e.enc;
@@ -225,10 +250,17 @@ function ReplayPlayer({ data, rep, onClose }: { data: GameData; rep: { run: RunR
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [speed]);
+  }, [speed, live]);
 
   const st = state.current;
   const total = events.length ? events[events.length - 1].t : 1;
+  const restart = () => {
+    state.current = { cursor: 0, t: 0, hp: snapshots.map(s => s.maxHp), mobs: new Map(), pull: -1 };
+    setLog([]);
+    dio.current?.reviveParty();
+    dio.current?.setMobs([]);
+    setLive(false);
+  };
   const skip = () => {
     const next = events.findIndex((e, i) => i > st.cursor && e.k === 'pull');
     if (next > 0) { st.t = events[next].t - 1; force(x => x + 1); }
@@ -237,8 +269,14 @@ function ReplayPlayer({ data, rep, onClose }: { data: GameData; rep: { run: RunR
   return (
     <>
       <div className="panel-head"><h2>{d?.name}</h2><span className="muted">{st.cursor >= events.length ? (run.cleared ? 'Cleared' : `Wiped after ${run.progress} of ${d?.encounters.length} pulls`) : `Pull ${st.pull + 1} of ${d?.encounters.length}`} · {fmtTime(run.durationMs)}</span><span className="spacer" />
-        {SPEEDS.map(x => <button key={x} className={`chip ${speed === x ? 'on' : ''}`} onClick={() => setSpeed(x)}>{x}x</button>)}
-        <button className="chip" onClick={skip}>Next pull</button>
+        {live && <span className="tag live">● LIVE</span>}
+        {watching.length > 0 && <span className="muted" style={{ fontSize: 12 }}>Watching: {watching.join(', ')}</span>}
+        {live ? <button className="chip" onClick={restart}>From the start</button>
+          : <>
+            {SPEEDS.map(x => <button key={x} className={`chip ${speed === x ? 'on' : ''}`} onClick={() => setSpeed(x)}>{x}x</button>)}
+            <button className="chip" onClick={skip}>Next pull</button>
+            {!!started && game.serverNow < ends && <button className="chip" onClick={() => { restart(); setLive(true); }}>Watch live</button>}
+          </>}
         <button className="btn secondary small" onClick={onClose}>Close</button></div>
       <div className="diorama replay-scene" ref={host}>
         <div className="hud replay-hud">

@@ -47,6 +47,8 @@ const isInt = (v: unknown, min: number, max: number): v is number => typeof v ==
 
 export class World {
   private chars = new Map<number, Char>();
+  /** Who is watching which run: run id -> account id -> open viewers. */
+  private watchers = new Map<number, Map<number, number>>();
   private listeners: Partial<WorldEvents>[] = [];
 
   constructor(private db: DB, readonly data: GameData, private clock: () => number = Date.now) {
@@ -524,6 +526,7 @@ export class World {
       }
     })();
     for (const m of members) this.emit('state', m.accountId);
+    this.addFeed(accountId, 'dungeon', `${this.chars.get(accountId)!.name}'s group entered ${d.name}. Watch them live on the Dungeons page!`, now);
     this.emit('guild');
     return OK;
   }
@@ -555,6 +558,20 @@ export class World {
     }
   }
 
+  /** A connection starts or stops watching a run (null stops). */
+  watch(accountId: number, run: number | null, prev: number | null): void {
+    if (prev != null) {
+      const m = this.watchers.get(prev);
+      const n = (m?.get(accountId) ?? 0) - 1;
+      if (m) { if (n > 0) m.set(accountId, n); else m.delete(accountId); if (!m.size) this.watchers.delete(prev); }
+    }
+    if (run != null && isInt(run, 1, 1e12)) {
+      const m = this.watchers.get(run) ?? this.watchers.set(run, new Map()).get(run)!;
+      m.set(accountId, (m.get(accountId) ?? 0) + 1);
+    }
+    this.emit('guild');
+  }
+
   /** A run's full result and snapshots, for the replay. */
   replay(runId: unknown): { run: RunResult; snapshots: Snapshot[] } | null {
     if (!isInt(runId, 1, 1e12)) return null;
@@ -577,6 +594,7 @@ export class World {
           cleared: done && res.cleared, progress: done ? res.progress : 0,
           members: snaps.map(s => ({ name: s.name, role: s.role, hireling: !!s.hireling, cls: s.cls })),
           loot: done ? res.loot.map(l => ({ item: l.item, winner: l.winner == null ? null : snaps[l.winner]?.name ?? null })) : [],
+          watching: [...(this.watchers.get(run.id)?.keys() ?? [])].map(nameOf),
         };
       }
       return { id: r.id, t: r.t, dungeon: r.dungeon, leaderId: r.leader_id, leader: nameOf(r.leader_id), members: JSON.parse(r.members), status: r.status, ...(summary ? { run: summary } : {}) };

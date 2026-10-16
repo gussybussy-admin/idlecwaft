@@ -258,3 +258,6 @@ input.text { background: #000; border: 1px solid var(--edge); border-radius: 4px
 .unitframe.small { width: 150px; padding: 3px 6px; margin-bottom: 3px; }
 .unitframe.small .uname { font-size: 11px; }
 .replay-log { font-size: 12px; color: var(--muted); margin-top: 8px; min-height: 120px; }
+.tag.live { color: #ff4040; border-color: #ff4040; font-weight: bold; }
+.modal.replay .panel-head { flex-wrap: wrap; row-gap: 6px; }
+.modal.replay { overflow-x: hidden; }

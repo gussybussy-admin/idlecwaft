@@ -23,6 +23,7 @@ export function createServer({ db, world, gameDataJson, clock = Date.now, launch
   const dataVersion = crypto.createHash('sha1').update(gameDataJson).digest('hex').slice(0, 16);
   const gameDataGzip = zlib.gzipSync(gameDataJson, { level: 9 }); // ~9 MB of JSON compresses ~10x
   const sockets = new Map<WebSocket, { accountId: number; username: string } | null>();
+  const watching = new Map<WebSocket, number | null>();
 
   const send = (ws: WebSocket, msg: ServerMessage) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); };
   const forAccount = (accountId: number, fn: (ws: WebSocket) => void) => {
@@ -163,6 +164,12 @@ export function createServer({ db, world, gameDataJson, clock = Date.now, launch
             : msg.op === 'join' ? world.joinGroup(acct.accountId, msg.group, msg.role)
             : msg.op === 'leave' || msg.op === 'cancel' ? world.leaveGroup(acct.accountId, msg.group)
             : msg.op === 'start' ? world.startGroup(acct.accountId, msg.group) : { ok: false, error: 'Bad op.' });
+        case 'watch': {
+          const run = typeof msg.run === 'number' ? msg.run : null;
+          world.watch(acct.accountId, run, watching.get(ws) ?? null);
+          watching.set(ws, run);
+          return;
+        }
         case 'replay': {
           const r = world.replay(msg.run);
           if (!r) return reply({ ok: false, error: 'No such run.' });
@@ -182,6 +189,8 @@ export function createServer({ db, world, gameDataJson, clock = Date.now, launch
       clearInterval(resync);
       const a = sockets.get(ws);
       sockets.delete(ws);
+      if (a && watching.get(ws) != null) world.watch(a.accountId, null, watching.get(ws)!);
+      watching.delete(ws);
       if (a && world.hasCharacter(a.accountId)) world.disconnect(a.accountId);
     });
   });

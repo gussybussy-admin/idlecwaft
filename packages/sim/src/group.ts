@@ -133,6 +133,7 @@ export function hireling(data: GameData, role: Role, level: number, side: 'allia
   s.char.hp = playerStats(s, data).maxHp;
   const snap = snapshotOf(s, data, null, role, level);
   snap.dps = Math.round(snap.dps * HIRELING_POWER);
+  if (role === 'tank') snap.maxHp = Math.round(snap.maxHp * 1.15); // the defensive talents a hired tank would have
   for (const h of snap.heals) h.amount = Math.round(h.amount * HIRELING_POWER);
   snap.name = `${h.name} ${n + 1}`;
   snap.hireling = true;
@@ -141,7 +142,8 @@ export function hireling(data: GameData, role: Role, level: number, side: 'allia
 
 const gearCache = new Map<string, Partial<Record<Slot, number>>>();
 /**
- * What a well-geared character of this class and level would wear: per slot, the best green or blue item
+ * What a well-geared character of this class and level would wear: per slot, the best green item (and blue
+ * from level 50, as endgame groups wear)
  * (by item level) the class can use at that level, preferring the role's stats.
  */
 export function hirelingGear(data: GameData, cls: number, role: Role, level: number): Partial<Record<Slot, number>> {
@@ -152,7 +154,7 @@ export function hirelingGear(data: GameData, cls: number, role: Role, level: num
   const wanted: Record<Role, number[]> = { tank: [7, 4, 3], healer: [5, 6, 7], dps: cls === 8 || cls === 5 || cls === 9 ? [5, 6, 7] : [4, 3, 7] }; // stat ids
   const best = new Map<Slot, { id: number; score: number }>();
   for (const it of Object.values(data.items)) {
-    if (it.quality < 2 || it.quality > 3 || it.reqLevel > level || it.reqLevel < level - 12 || !equipSlots(it).length) continue;
+    if (it.quality < 2 || it.quality > (level >= 50 ? 3 : 2) || it.reqLevel > level || it.reqLevel < level - 12 || !equipSlots(it).length) continue;
     const prof = proficiencyFor(it);
     if (prof && (skills[prof] === undefined || skills[prof] > level)) continue;
     if (it.class === 2 && it.subclass === 20) continue; // fishing poles
@@ -284,7 +286,9 @@ function fight(data: GameData, members: Member[], mobs: Mob[], rng: RngState, st
     const living = mobs.filter(m => m.hp > 0);
     if (!living.length) { setT(t); return true; }
     if (!alive().length) { setT(t); return false; }
-    const focus = living[0];
+    // Kill order: casters that crowd-control or heal first (as groups do), then the weakest.
+    const danger = (m: Mob) => (m.def.abilities ?? []).some(a => a.effects.some(e => e.k === 'cc' || e.k === 'heal')) ? 0 : 1;
+    const pickFocus = () => mobs.filter(m => m.hp > 0).sort((a, b) => danger(a) - danger(b) || a.hp - b.hp)[0];
 
     // ---- members act
     members.forEach((m, i) => {
@@ -315,6 +319,8 @@ function fight(data: GameData, members: Member[], mobs: Mob[], rng: RngState, st
       }
       const dps = m.snap.role === 'tank' ? m.snap.dps * 0.7 : m.snap.role === 'healer' ? m.snap.dps * 0.3 : m.snap.dps;
       if (dps <= 0) return;
+      const focus = pickFocus(); // the next living target (no damage wasted on a mob that just died)
+      if (!focus) return;
       const crit = chance(rng, 10);
       const amt = Math.max(1, Math.round(dps * (0.85 + next(rng) * 0.3) * (crit ? 1.5 : 1)));
       focus.hp -= amt;
@@ -370,8 +376,12 @@ function fight(data: GameData, members: Member[], mobs: Mob[], rng: RngState, st
   return false;
 }
 
+/** Tanks fight in Defensive Stance, Bear Form or with Righteous Fury: 10% less damage taken. */
+const TANK_STANCE = 0.9;
+
 function hurt(m: Member, i: number, amt: number, src: number, events: RunEvent[], t: number, spell?: number): void {
   if (m.dead || amt <= 0) return;
+  if (m.snap.role === 'tank') amt = Math.max(1, Math.round(amt * TANK_STANCE));
   m.hp -= amt;
   if (m.castEnd) m.castEnd += 500; // spell pushback
   events.push({ t, k: 'hit', src, dst: i, mob: true, amt, ...(spell ? { spell } : {}) });

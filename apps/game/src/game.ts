@@ -212,6 +212,8 @@ export class Game {
     if (op === 'join') return this.request({ t: 'group', id, op, group: target, role: role! });
     return this.request({ t: 'group', id, op, group: target });
   }
+  /** Tell the server which run we're watching (null to stop). */
+  watch(run: number | null): void { this.send({ t: 'watch', run }); }
   /** A run's full replay (events + snapshots). */
   replay(run: number): Promise<{ run: RunResult; snapshots: Snapshot[] } | null> {
     return new Promise(resolve => {

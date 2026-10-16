@@ -29,6 +29,8 @@ export interface RunSummary {
   id: number; started: number; ends: number; cleared: boolean; progress: number; total: number;
   members: { name: string; role: Role; hireling: boolean; cls: number }[];
   loot: { item: number; winner: string | null }[];
+  /** Guild members watching the run right now. */
+  watching: string[];
 }
 export interface DungeonGroup {
   id: number; t: number; dungeon: number; leaderId: number; leader: string;
@@ -58,6 +60,8 @@ export type ClientMessage =
   | { t: 'group'; id: number; op: 'join'; group: number; role: Role }
   | { t: 'group'; id: number; op: 'leave' | 'start' | 'cancel'; group: number }
   | { t: 'replay'; id: number; run: number }
+  /** Which run this connection is watching (null: none), so the guild sees who's watching live. */
+  | { t: 'watch'; run: number | null }
   | { t: 'ping' };
 
 export type ServerMessage =

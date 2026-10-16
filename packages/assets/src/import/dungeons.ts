@@ -10,7 +10,8 @@ import type { ZoneLookup } from './zone-lookup.js';
 import { PATCH_1_12, type Row, type VMangos } from './vmangos.js';
 
 /** Instances with several runs: each wing's name, LFG entry, final boss, group size. */
-const WINGS: Record<number, { name: string; lfg?: number; anchor: string; size?: number; level?: [number, number] }[]> = {
+/** Instances with several runs: each wing's name, LFG entry, final boss, landmark bosses that mark its area, group size. */
+const WINGS: Record<number, { name: string; lfg?: number; anchor: string; landmarks?: string[]; size?: number; level?: [number, number] }[]> = {
   189: [
     { name: 'Scarlet Monastery: Graveyard', anchor: 'Bloodmage Thalnos', level: [28, 38] },
     { name: 'Scarlet Monastery: Library', anchor: 'Arcanist Doan', level: [33, 40] },
@@ -18,13 +19,14 @@ const WINGS: Record<number, { name: string; lfg?: number; anchor: string; size?:
     { name: 'Scarlet Monastery: Cathedral', anchor: 'High Inquisitor Whitemane', level: [37, 46] },
   ],
   429: [
-    { name: 'Dire Maul: East', lfg: 33, anchor: 'Alzzin the Wildshaper' },
-    { name: 'Dire Maul: West', lfg: 35, anchor: 'Prince Tortheldrin' },
-    { name: 'Dire Maul: North', lfg: 37, anchor: 'King Gordok' },
+    { name: 'Dire Maul: East', lfg: 33, anchor: 'Alzzin the Wildshaper', landmarks: ['Zevrim Thornhoof', 'Hydrospawn', 'Lethtendris'] },
+    { name: 'Dire Maul: West', lfg: 35, anchor: 'Prince Tortheldrin', landmarks: ["Immol'thar", 'Tendris Warpwood', 'Magister Kalendris'] },
+    { name: 'Dire Maul: North', lfg: 37, anchor: 'King Gordok', landmarks: ["Guard Mol'dar", 'Guard Fengus', "Guard Slip'kik", 'Captain Kromcrush', "Cho'Rush the Observer"] },
   ],
   329: [
-    { name: 'Stratholme: Live', lfg: 39, anchor: 'Grand Crusader Dathrohan' }, // becomes Balnazzar mid-fight
-    { name: 'Stratholme: Undead', lfg: 39, anchor: 'Baron Rivendare' },
+    // Dathrohan becomes Balnazzar mid-fight
+    { name: 'Stratholme: Live', lfg: 39, anchor: 'Grand Crusader Dathrohan', landmarks: ['Timmy the Cruel', 'Malor the Zealous', 'Archivist Galford', 'Cannon Master Willey'] },
+    { name: 'Stratholme: Undead', lfg: 39, anchor: 'Baron Rivendare', landmarks: ['Baroness Anastari', "Nerub'enkan", 'Maleki the Pallid', 'Magistrate Barthilas', 'Ramstein the Gorger'] },
   ],
   229: [
     { name: 'Lower Blackrock Spire', lfg: 31, anchor: 'Overlord Wyrmthalak' },
@@ -34,7 +36,7 @@ const WINGS: Record<number, { name: string; lfg?: number; anchor: string; size?:
 /** LFG names that differ from Map.dbc names. */
 const LFG_ALIASES: Record<string, string> = { 'Stormwind Stockades': 'Stormwind Stockade', "Zul'Farak": "Zul'Farrak" };
 
-const PACK_RADIUS = 18;           // yards: spawns this close form one pull
+const PACK_RADIUS = 12;           // yards: spawns this close form one pull
 const PACKS_PER_BOSS = 4;         // trash pulls kept before each boss (runs stay ~20-40 minutes)
 const CREATURE_TYPE_CRITTER = 8;
 
@@ -90,7 +92,8 @@ export function buildDungeons(client: Client, vm: VMangos, zl: ZoneLookup, inp: 
   const fightable = (entry: number): CreatureDef | null => {
     if (inp.creatures[entry]) return inp.creatures[entry];
     const t = template(entry);
-    if (!t || Number(t.npc_flags) || Number(t.type) === CREATURE_TYPE_CRITTER) return null;
+    // Hostile creatures that also talk (gossip 1, quest giver 2) still fight; vendors, trainers and the like do not.
+    if (!t || (Number(t.npc_flags) & ~3) || Number(t.type) === CREATURE_TYPE_CRITTER) return null;
     const def = inp.creatureDef(t);
     if (!def || def.hostile.length === 0) return null;
     def.abilities = abilities(vm, t);
@@ -98,27 +101,39 @@ export function buildDungeons(client: Client, vm: VMangos, zl: ZoneLookup, inp: 
     return def;
   };
   /**
-   * Boss: an elite that spawns once and has at least two uncommon-or-better items that really drop
-   * (≥3% each, following loot references). Trash only reaches good items through tiny world-drop chances.
+   * Boss: an elite that spawns once in the instance and shows it in the data — a rare elite, an encounter
+   * script, a guaranteed gear drop (early bosses drop one item for sure: Rhahk'Zor's hammer), at least two
+   * uncommon-or-better items that really drop (≥3%, following references), or a quest item. Trash only
+   * reaches good items through tiny world-drop chances.
    */
   const isBoss = (def: CreatureDef, spawns: number) => {
-    if (spawns !== 1 || def.rank === 0 || !def.loot) return false;
+    if (spawns !== 1 || def.rank === 0) return false;
+    if (def.rank === 2 || def.rank === 4) return true;
+    const script = String(template(def.id)?.script_name ?? '');
+    if (script && /^(boss_|npc_)/.test(script) && def.loot) return true;
+    if (!def.loot) return false;
     const good = new Set<number>();
+    let guaranteedGear = false, questDrop = false;
+    const isGear = (item: number) => { const t = vm.cachedItem(item); return !!t && (Number(t.class) === 2 || Number(t.class) === 4); };
     const walk = (ref: string, scale: number, depth: number) => {
       const t = vm.tables[ref];
       if (!t || depth > 4) return;
       const visit = (e: (typeof t.entries)[number], chance: number) => {
-        if ('item' in e) { if (chance * scale >= 3 && Number(vm.cachedItem(e.item)?.quality) >= 2) good.add(e.item); }
-        else walk(e.ref, scale * Math.min(100, chance * Math.max(1, e.times)) / 100, depth + 1);
+        if ('item' in e) {
+          if ('quest' in e && e.quest) questDrop = true;
+          if (chance * scale >= 3 && Number(vm.cachedItem(e.item)?.quality) >= 2) good.add(e.item);
+        } else walk(e.ref, scale * Math.min(100, chance * Math.max(1, e.times)) / 100, depth + 1);
       };
       for (const e of t.entries) visit(e, e.chance);
       for (const g of t.groups) {
         const explicit = g.reduce((a, e) => a + e.chance, 0), even = g.filter(e => !e.chance).length;
+        const sure = scale >= 0.99 && (explicit >= 99 || even > 0);
+        if (sure && g.some(e => 'item' in e && isGear(e.item))) guaranteedGear = true;
         for (const e of g) visit(e, e.chance || (even ? Math.max(0, 100 - explicit) / even : 0));
       }
     };
     walk(def.loot, 1, 0);
-    return good.size >= 2;
+    return guaranteedGear || questDrop || good.size >= 2;
   };
 
   const out: Record<number, DungeonDef> = {};
@@ -126,16 +141,17 @@ export function buildDungeons(client: Client, vm: VMangos, zl: ZoneLookup, inp: 
     const all = spawnsByMap.get(run.map) ?? [];
     const counts = new Map<number, number>();
     for (const s of all) counts.set(s.entry, (counts.get(s.entry) ?? 0) + 1);
-    // Which wing each spawn belongs to: the nearest wing anchor (3D).
+    // Which wing each spawn belongs to: the wing of the nearest anchor or landmark (3D).
     const wings = WINGS[run.map];
     let spawns = all;
     if (wings) {
-      const anchors = wings.map(w => all.find(s => template(s.entry)?.name === w.anchor) ?? null);
+      const find = (name: string) => all.find(s => template(s.entry)?.name === name) ?? null;
+      const marks = wings.flatMap((w, i) => [w.anchor, ...(w.landmarks ?? [])].map(n => ({ at: find(n), wing: i }))).filter(m => m.at);
       const mine = wings.findIndex(w => w.name === run.name);
-      if (!anchors[mine]) continue;
+      if (!find(wings[mine].anchor)) continue;
       spawns = all.filter(s => {
         let best = -1, bd = Infinity;
-        anchors.forEach((a, i) => { if (a) { const d = dist(a, s); if (d < bd) { bd = d; best = i; } } });
+        for (const m of marks) { const d = dist(m.at!, s); if (d < bd) { bd = d; best = m.wing; } }
         return best === mine;
       });
     }
@@ -158,7 +174,7 @@ export function buildDungeons(client: Client, vm: VMangos, zl: ZoneLookup, inp: 
       const prev = i ? bosses[i - 1] : start;
       const mine = packs.filter(p => nearestIndex(bosses, p.center) === i)
         .sort((x, y) => dist(prev, x.center) - dist(prev, y.center));
-      for (const p of pickEvenly(mine, PACKS_PER_BOSS)) encounters.push({ mobs: tally(p.members.slice(0, 5)) });
+      for (const p of pickEvenly(mine, PACKS_PER_BOSS)) encounters.push({ mobs: tally(p.members.slice(0, 4)) });
       encounters.push({ boss: b.entry, mobs: [[b.entry, 1]] });
     });
     out[run.lfg] = {
