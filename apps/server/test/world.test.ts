@@ -144,6 +144,42 @@ describe('guild bank and requests', () => {
   });
 });
 
+describe('dungeons', () => {
+  it('forms a group, fills it with hirelings, keeps members busy, then delivers rewards', () => {
+    const { world, account, clock } = setup();
+    const lead = account('jade'), friend = account('kim');
+    for (const id of [lead, friend]) {
+      const st = world.stateOf(id)!;
+      st.char.level = 12;
+      st.spells = (data.classSpells[st.char.cls] ?? []).map(o => o.spell);
+    }
+    expect(world.createGroup(lead, 1, 'healer')).toEqual({ ok: false, error: "Fighters can't heal." });
+    expect(world.createGroup(lead, 1, 'tank').ok).toBe(true);
+    const grp = world.guildSnapshot().groups[0];
+    expect(world.joinGroup(friend, grp.id, 'dps').ok).toBe(true);
+    expect(world.startGroup(friend, grp.id)).toEqual({ ok: false, error: 'Only the group leader can start the run.' });
+    expect(world.startGroup(lead, grp.id, 42).ok).toBe(true);
+    const running = world.guildSnapshot().groups[0];
+    expect(running.status).toBe('running');
+    expect(running.run!.members).toHaveLength(5);
+    expect(running.run!.members.filter(m => m.hireling)).toHaveLength(3);
+    expect(running.run!.members.some(m => m.role === 'healer' && m.hireling)).toBe(true);
+    expect(world.stateOf(lead)!.action?.kind).toBe('dungeon');
+    expect(world.command(lead, { name: 'stop' })).toEqual({ ok: false, error: "You're in a dungeon with your group." });
+    const gold0 = world.stateOf(friend)!.gold; // (level 12 is the fixture's level cap, so no XP)
+    clock.add(running.run!.ends - clock.get() + 1000);
+    world.tick();
+    expect(world.stateOf(lead)!.action).toBeNull();
+    expect(world.stateOf(friend)!.gold).toBeGreaterThan(gold0);
+    expect(world.stateOf(friend)!.log.some(l => l.text.startsWith('Test Hold:'))).toBe(true);
+    const done = world.guildSnapshot().groups[0];
+    expect(done.status).toBe('done');
+    const replay = world.replay(done.run!.id)!;
+    expect(replay.run.events.length).toBeGreaterThan(10);
+    expect(replay.snapshots).toHaveLength(5);
+  });
+});
+
 describe('chat and feed', () => {
   it('broadcasts chat with a rate limit and announces joins and rank-ups', () => {
     const { world, account } = setup();

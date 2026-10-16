@@ -250,3 +250,11 @@ input.text { background: #000; border: 1px solid var(--edge); border-radius: 4px
 .chip.on { border-color: var(--gold); color: var(--gold); }
 .cat-head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 10px 0 4px; }
 .text.search { max-width: 220px; }
+
+/* dungeon replays */
+.modal.replay { max-width: 980px; width: 96vw; }
+.replay-scene { height: 380px; }
+.replay-hud { display: flex; justify-content: space-between; align-items: flex-start; width: 100%; }
+.unitframe.small { width: 150px; padding: 3px 6px; margin-bottom: 3px; }
+.unitframe.small .uname { font-size: 11px; }
+.replay-log { font-size: 12px; color: var(--muted); margin-top: 8px; min-height: 120px; }

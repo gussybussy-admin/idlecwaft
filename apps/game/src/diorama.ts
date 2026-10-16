@@ -23,20 +23,76 @@ const ACTIVITY_ANIMS: Record<Activity, string[]> = {
 
 const loader = new GLTFLoader();
 const gltfCache = new Map<string, Promise<GLTF | null>>();
-function loadGLTF(url: string): Promise<GLTF | null> {
+export function loadGLTF(url: string): Promise<GLTF | null> {
   if (!gltfCache.has(url)) gltfCache.set(url, loader.loadAsync(url).catch(() => null));
   return gltfCache.get(url)!;
 }
 
-type DisplayEntry = { scale: number; humanoid?: HumanoidSpec };
+export type DisplayEntry = { scale: number; humanoid?: HumanoidSpec };
 const displayCache = new Map<number, Promise<DisplayEntry | null>>();
 /** creatures/<id>.json (converted on first request by the launcher / dev server). */
-const displayEntry = (id: number) => {
+export const displayEntry = (id: number) => {
   if (!displayCache.has(id)) displayCache.set(id, fetch(`creatures/${id}.json`).then(r => r.ok ? r.json() as Promise<DisplayEntry> : null).catch(() => null));
   return displayCache.get(id)!;
 };
 
 const MOB_X = 1.6, PLAYER_X = -1.6;
+
+/** The Elwynn clearing every scene stands in: sky, light, grass and dirt from the client, real trees. */
+export function buildClearing(scene: THREE.Scene, isDisposed: () => boolean): void {
+    const sky = new THREE.Color(0x9cc4e4);
+    scene.background = sky;
+    scene.fog = new THREE.Fog(sky, 14, 42);
+    scene.add(new THREE.HemisphereLight(0xdfefff, 0x4a5a2a, 1.4));
+    const sun = new THREE.DirectionalLight(0xfff0d0, 2.4);
+    sun.position.set(-6, 10, 6);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(1024, 1024);
+    sun.shadow.camera.left = -6; sun.shadow.camera.right = 6; sun.shadow.camera.top = 6; sun.shadow.camera.bottom = -6;
+    scene.add(sun);
+
+    // Ground: Elwynn grass tileset texture from the client.
+    const tex = new THREE.TextureLoader().load('tiles/elwynngrassbase.png');
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(24, 24);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    const ground = new THREE.Mesh(new THREE.CircleGeometry(60, 64), new THREE.MeshLambertMaterial({ map: tex }));
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+    const dirtTex = new THREE.TextureLoader().load('tiles/elwynndirtbase.png');
+    dirtTex.wrapS = dirtTex.wrapT = THREE.RepeatWrapping;
+    dirtTex.repeat.set(4, 4);
+    dirtTex.colorSpace = THREE.SRGBColorSpace;
+    const path = new THREE.Mesh(new THREE.CircleGeometry(3.4, 48), new THREE.MeshLambertMaterial({ map: dirtTex, transparent: true, opacity: 0.85 }));
+    path.rotation.x = -Math.PI / 2;
+    path.position.y = 0.01;
+    path.receiveShadow = true;
+    scene.add(path);
+
+    // A ring of real Elwynn trees behind the fight.
+    // Elwynn's canopy trees are ~60 yards tall in the client; scaled down so they frame the scene.
+    const trees: [string, number, number, number, number][] = [
+      ['elwynntreecanopy01', -11, -14, 0.32, 0.3], ['elwynntreecanopy03', 10, -18, 0.22, 2.1], ['elwynnfirtree01', -18, -10, 0.45, 1.2],
+      ['elwynntreecanopy01', 17, -9, 0.28, 4.0], ['elwynnfirtree01', 2, -22, 0.5, 0.8], ['elwynntreestump01', 3.8, -2.8, 0.5, 1.7],
+      ['elwynntreecanopy03', -24, -24, 0.3, 5.1], ['elwynnfirtree01', 25, -20, 0.5, 2.8], ['elwynnfirtree01', -5, -26, 0.55, 3.3],
+    ];
+    for (const [name, x, z, s, ry] of trees) {
+      loadGLTF(`doodads/${name}.glb`).then(g => {
+        if (!g || isDisposed()) return;
+        const obj = cloneSkinned(g.scene); // skinned meshes must be cloned with their skeleton
+        obj.position.set(x, 0, z);
+        obj.scale.setScalar(s);
+        obj.rotation.y = ry;
+        obj.traverse(o => {
+          const m = o as THREE.Mesh;
+          if (m.isMesh) { m.castShadow = true; m.frustumCulled = false; for (const mat of ([] as THREE.Material[]).concat(m.material)) (mat as THREE.MeshStandardMaterial).alphaTest = 0.5; }
+        });
+        scene.add(obj);
+      });
+    }
+}
 
 export class Diorama {
   private renderer: THREE.WebGLRenderer;
@@ -77,58 +133,7 @@ export class Diorama {
   private onBlur = () => { this.focused = false; };
 
   private buildScene() {
-    const sky = new THREE.Color(0x9cc4e4);
-    this.scene.background = sky;
-    this.scene.fog = new THREE.Fog(sky, 14, 42);
-    this.scene.add(new THREE.HemisphereLight(0xdfefff, 0x4a5a2a, 1.4));
-    const sun = new THREE.DirectionalLight(0xfff0d0, 2.4);
-    sun.position.set(-6, 10, 6);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
-    sun.shadow.camera.left = -6; sun.shadow.camera.right = 6; sun.shadow.camera.top = 6; sun.shadow.camera.bottom = -6;
-    this.scene.add(sun);
-
-    // Ground: Elwynn grass tileset texture from the client.
-    const tex = new THREE.TextureLoader().load('tiles/elwynngrassbase.png');
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(24, 24);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 4;
-    const ground = new THREE.Mesh(new THREE.CircleGeometry(60, 64), new THREE.MeshLambertMaterial({ map: tex }));
-    ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
-    this.scene.add(ground);
-    const dirtTex = new THREE.TextureLoader().load('tiles/elwynndirtbase.png');
-    dirtTex.wrapS = dirtTex.wrapT = THREE.RepeatWrapping;
-    dirtTex.repeat.set(4, 4);
-    dirtTex.colorSpace = THREE.SRGBColorSpace;
-    const path = new THREE.Mesh(new THREE.CircleGeometry(3.4, 48), new THREE.MeshLambertMaterial({ map: dirtTex, transparent: true, opacity: 0.85 }));
-    path.rotation.x = -Math.PI / 2;
-    path.position.y = 0.01;
-    path.receiveShadow = true;
-    this.scene.add(path);
-
-    // A ring of real Elwynn trees behind the fight.
-    // Elwynn's canopy trees are ~60 yards tall in the client; scaled down so they frame the scene.
-    const trees: [string, number, number, number, number][] = [
-      ['elwynntreecanopy01', -11, -14, 0.32, 0.3], ['elwynntreecanopy03', 10, -18, 0.22, 2.1], ['elwynnfirtree01', -18, -10, 0.45, 1.2],
-      ['elwynntreecanopy01', 17, -9, 0.28, 4.0], ['elwynnfirtree01', 2, -22, 0.5, 0.8], ['elwynntreestump01', 3.8, -2.8, 0.5, 1.7],
-      ['elwynntreecanopy03', -24, -24, 0.3, 5.1], ['elwynnfirtree01', 25, -20, 0.5, 2.8], ['elwynnfirtree01', -5, -26, 0.55, 3.3],
-    ];
-    for (const [name, x, z, s, ry] of trees) {
-      loadGLTF(`doodads/${name}.glb`).then(g => {
-        if (!g || this.disposed) return;
-        const obj = cloneSkinned(g.scene); // skinned meshes must be cloned with their skeleton
-        obj.position.set(x, 0, z);
-        obj.scale.setScalar(s);
-        obj.rotation.y = ry;
-        obj.traverse(o => {
-          const m = o as THREE.Mesh;
-          if (m.isMesh) { m.castShadow = true; m.frustumCulled = false; for (const mat of ([] as THREE.Material[]).concat(m.material)) (mat as THREE.MeshStandardMaterial).alphaTest = 0.5; }
-        });
-        this.scene.add(obj);
-      });
-    }
+    buildClearing(this.scene, () => this.disposed);
     this.camera.position.set(0, 2.4, 7.5);
     this.camera.lookAt(0, 0.9, 0);
   }

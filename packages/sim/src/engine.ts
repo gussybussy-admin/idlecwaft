@@ -222,6 +222,12 @@ function step(s: GameState, data: GameData, emit: Emit): void {
     case 'craft': return stepCraft(s, data, a.recipe, emit);
     case 'travel': return stepTravel(s, data, a.to, emit);
     case 'quest': return stepQuestTask(s, data, a.quest, emit);
+    case 'dungeon':
+      if (s.phase.p !== 'work') { s.phase = { p: 'work', from: s.now, until: Math.max(s.now, a.until) }; return; }
+      log(s, 'info', `You leave ${data.dungeons?.[a.dungeon]?.name ?? 'the dungeon'}.`);
+      s.action = null;
+      s.phase = { p: 'idle' };
+      return;
   }
 }
 
@@ -428,6 +434,9 @@ function maybeSkin(s: GameState, data: GameData, def: CreatureDef, mob: Mob, emi
   emit({ t: s.now, type: 'harvest', skill: 'skinning', items: [...drops] });
   skillUp(s, 'skinning', SKILLUP_CHANCE[gatherColor(sk.level, req)], emit);
 }
+
+/** Experience from outside the fight loop (dungeon runs), through the normal level-up path. */
+export function grantXp(s: GameState, data: GameData, xp: number, emit: Emit = () => {}): void { gainXp(s, data, xp, emit); }
 
 function gainXp(s: GameState, data: GameData, xp: number, emit: Emit): void {
   if (!xp) return;
@@ -706,6 +715,8 @@ const ok: CommandResult = { ok: true };
 const fail = (error: string): CommandResult => ({ ok: false, error });
 
 export function startAction(s: GameState, data: GameData, action: Action): CommandResult {
+  if (action.kind === 'dungeon') return fail('Dungeon runs start from the group finder.');
+  if (s.action?.kind === 'dungeon') return fail("You're in a dungeon with your group.");
   if (action.kind === 'fish' && s.skills.fishing.max) giveStarterPole(s, data);
   const err = action.kind === 'fight' ? canFight(s, data, action.creature)
     : action.kind === 'gather' ? canGather(s, data, action.node)
@@ -723,6 +734,7 @@ export function startAction(s: GameState, data: GameData, action: Action): Comma
 
 export function stopAction(s: GameState): CommandResult {
   if (s.phase.p === 'dead') return fail('You are dead. Wait to resurrect.');
+  if (s.action?.kind === 'dungeon') return fail("You're in a dungeon with your group.");
   if (s.action?.kind === 'travel' && s.phase.p === 'work') return fail("You're travelling. Wait until you arrive.");
   s.action = null;
   s.phase = { p: 'idle' };

@@ -1,0 +1,39 @@
+// Dungeon data: instances split into runs (wings), each an ordered list of encounters, plus the
+// abilities creatures cast (from their VMaNGOS spell lists), which become the boss mechanics of the
+// group simulation.
+
+/** What a creature's spell does, normalized for the group simulation. Schools: 0 physical .. 6 arcane. */
+export type AbilityEffect =
+  | { k: 'damage'; school: number; min: number; max: number }
+  | { k: 'dot'; school: number; perTick: number; ticks: number; ampMs: number }
+  | { k: 'cc'; ms: number }                      // stun, fear, sleep, polymorph: the target loses its turns
+  | { k: 'heal'; amount: number }                // heals the caster
+  | { k: 'summon'; creature: number; count: number }
+  | { k: 'enrage'; pct: number }                 // damage done up
+  | { k: 'extraAttacks'; n: number }
+  | { k: 'knockback' };                          // the tank loses the mob's attention for a moment
+
+export interface CreatureAbility {
+  spell: number; name: string;
+  /** Hits everyone near the target instead of one player. */
+  aoe: boolean;
+  /** Who it's cast at. */
+  target: 'tank' | 'random' | 'self';
+  /** First cast and repeat delay ranges, ms. */
+  firstMs: [number, number]; repeatMs: [number, number];
+  chance: number;
+  effects: AbilityEffect[];
+}
+
+/** One pull: a trash pack, or a boss (with any adds in `mobs`). */
+export interface Encounter { boss?: number; mobs: [number, number][] }
+
+export interface DungeonDef {
+  id: number; name: string; map: number;
+  /** The zone the instance portal is in (for display). */
+  zone: number | null;
+  minLevel: number; maxLevel: number;
+  /** Players per group: 5, or 10 for Upper Blackrock Spire. */
+  size: number;
+  encounters: Encounter[];
+}

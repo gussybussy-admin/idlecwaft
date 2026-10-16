@@ -153,6 +153,7 @@ export function ActionScene({ s, data, hint }: P & { hint?: string }) {
     : a.kind === 'fish' ? 'fishing'
     : a.kind === 'travel' ? 'travel'
     : a.kind === 'quest' ? 'quest'
+    : a.kind === 'dungeon' ? 'idle'
     : recipe?.skill === 'cooking' ? 'cooking'
     : recipe?.skill === 'blacksmithing' || recipe?.skill === 'mining' ? 'smithing'
     : recipe?.skill === 'enchanting' ? 'enchanting' : 'crafting';
@@ -168,6 +169,7 @@ export function ActionScene({ s, data, hint }: P & { hint?: string }) {
     : a?.kind === 'craft' && recipe ? `${recipe.skill === 'cooking' ? 'Cooking' : 'Making'} ${recipe.name}…`
     : a?.kind === 'travel' ? `Travelling to ${data.zones.find(z => z.id === a.to)?.name}${until ? ` · ${fmtTime(Math.max(0, until - Date.now()))} left` : ''}`
     : a?.kind === 'quest' ? `${data.quests[a.quest]?.task?.label ?? 'Questing'}…`
+    : a?.kind === 'dungeon' ? `In ${data.dungeons[a.dungeon]?.name} with your group · back in ${fmtTime(Math.max(0, a.until - Date.now()))}`
     : !a ? (hint ?? 'Idle') : '';
   return (
     <div className="diorama" ref={host}>

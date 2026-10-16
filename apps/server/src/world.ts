@@ -3,7 +3,8 @@
 import {
   addItem, advance, applyCommand, emptySummary, hasItem, migrateState, newGame, OFFLINE_CAP_MS, SKILL_NAME, summarize,
   type Appearance, type BankLogEntry, type ChatMessage, type Command, type CommandResult, type FeedItem,
-  type CraftOrder, type GameData, type GameState, type GuildRequest, type GuildSnapshot, type RosterEntry, type SimEvent, type Summary,
+  applyRunRewards, factionOfRace, hireling, ROLE_CLASSES, ROLES, simulateRun, snapshotOf,
+  type CraftOrder, type DungeonGroup, type GroupMember, type Role, type RunResult, type RunSummary, type Snapshot, type GameData, type GameState, type GuildRequest, type GuildSnapshot, type RosterEntry, type SimEvent, type Summary,
 } from '@idle/sim';
 import type { DB } from './db.js';
 
@@ -14,6 +15,9 @@ const KILL_FEED_WINDOW_MS = 30 * 60_000;
 const CHAT_MAX = 300, CHAT_BURST = 5, CHAT_WINDOW_MS = 10_000;
 const MAX_OPEN_REQUESTS = 10;
 const MAX_OPEN_ORDERS = 10;
+
+interface GroupRow { id: number; t: number; leader_id: number; dungeon: number; members: string; status: DungeonGroup['status']; run_id: number | null }
+interface RunRow { id: number; group_id: number; dungeon: number; started: number; ends: number; snapshots: string; result: string; delivered: number }
 
 interface OrderRow { id: number; t: number; account_id: number; recipe: number; count: number; reagents: string; tip: number; note: string; crafter_id: number | null; open: number; delivered: number }
 
@@ -86,6 +90,7 @@ export class World {
   tick(): void {
     const now = this.clock();
     for (const c of this.chars.values()) this.advanceChar(c, now);
+    this.deliverRuns(now);
   }
 
   private onSimEvent(c: Char, e: SimEvent): void {
@@ -411,6 +416,173 @@ export class World {
     return OK;
   }
 
+  // ------------------------------------------------------------------ dungeons: sign-ups, runs, rewards
+
+  private group(id: unknown): GroupRow | undefined {
+    if (!isInt(id, 1, 1e12)) return undefined;
+    return this.db.prepare(`SELECT * FROM dungeon_groups WHERE id = ?`).get(id) as GroupRow | undefined;
+  }
+
+  /** Can this character take this role in this dungeon right now? */
+  private signUpError(c: Char, dungeon: number, role: unknown): string | null {
+    const d = this.data.dungeons?.[dungeon];
+    if (!d) return 'Unknown dungeon.';
+    if (!ROLES.includes(role as Role)) return 'Pick a role.';
+    if (!ROLE_CLASSES[role as Role].includes(c.state.char.cls)) return `${this.data.classes.find(x => x.id === c.state.char.cls)?.name ?? 'Your class'}s can't ${role === 'tank' ? 'tank' : 'heal'}.`;
+    if (c.state.char.level < d.minLevel) return `Requires level ${d.minLevel}.`;
+    if (c.state.action?.kind === 'dungeon') return "You're already in a dungeon.";
+    const open = (this.db.prepare(`SELECT members FROM dungeon_groups WHERE status = 'open'`).all() as { members: string }[])
+      .some(g => (JSON.parse(g.members) as GroupMember[]).some(m => m.accountId === c.accountId));
+    if (open) return "You're already signed up for a group.";
+    return null;
+  }
+
+  private member(c: Char, role: Role): GroupMember {
+    return { accountId: c.accountId, name: c.name, role, level: c.state.char.level, cls: c.state.char.cls };
+  }
+
+  createGroup(accountId: number, dungeon: unknown, role: unknown): Result {
+    const c = this.chars.get(accountId);
+    if (!c) return fail('No character.');
+    if (!isInt(dungeon, 1, 1e9)) return fail('Unknown dungeon.');
+    const err = this.signUpError(c, dungeon, role);
+    if (err) return fail(err);
+    this.db.prepare(`INSERT INTO dungeon_groups (t, leader_id, dungeon, members) VALUES (?, ?, ?, ?)`)
+      .run(this.clock(), accountId, dungeon, JSON.stringify([this.member(c, role as Role)]));
+    this.emit('guild');
+    return OK;
+  }
+
+  joinGroup(accountId: number, groupId: unknown, role: unknown): Result {
+    const c = this.chars.get(accountId);
+    const g = this.group(groupId);
+    if (!c) return fail('No character.');
+    if (!g || g.status !== 'open') return fail('That group is no longer forming.');
+    const err = this.signUpError(c, g.dungeon, role);
+    if (err) return fail(err);
+    const members = JSON.parse(g.members) as GroupMember[];
+    if (members.length >= (this.data.dungeons[g.dungeon]?.size ?? 5)) return fail('That group is full.');
+    members.push(this.member(c, role as Role));
+    this.db.prepare(`UPDATE dungeon_groups SET members = ? WHERE id = ?`).run(JSON.stringify(members), g.id);
+    this.emit('guild');
+    return OK;
+  }
+
+  leaveGroup(accountId: number, groupId: unknown): Result {
+    const g = this.group(groupId);
+    if (!g || g.status !== 'open') return fail('That group is no longer forming.');
+    const members = (JSON.parse(g.members) as GroupMember[]).filter(m => m.accountId !== accountId);
+    if (g.leader_id === accountId || !members.length) this.db.prepare(`UPDATE dungeon_groups SET status = 'cancelled' WHERE id = ?`).run(g.id);
+    else this.db.prepare(`UPDATE dungeon_groups SET members = ? WHERE id = ?`).run(JSON.stringify(members), g.id);
+    this.emit('guild');
+    return OK;
+  }
+
+  /**
+   * The leader starts the run: everyone's snapshot is taken now, hirelings fill the empty slots (a tank
+   * and a healer first), the run is simulated, and every member is busy in the dungeon until it ends.
+   */
+  startGroup(accountId: number, groupId: unknown, seed = Math.floor(Math.random() * 2 ** 31)): Result {
+    const g = this.group(groupId);
+    if (!g || g.status !== 'open') return fail('That group is no longer forming.');
+    if (g.leader_id !== accountId) return fail('Only the group leader can start the run.');
+    const d = this.data.dungeons[g.dungeon];
+    if (!d) return fail('Unknown dungeon.');
+    const now = this.clock();
+    const members = JSON.parse(g.members) as GroupMember[];
+    const snaps: Snapshot[] = [];
+    for (const m of members) {
+      const c = this.chars.get(m.accountId);
+      if (!c) return fail(`${m.name} has no character.`);
+      this.advanceChar(c, now);
+      if (c.state.now < now) c.state.now = now; // paused beyond the offline window: resume now
+      if (c.state.action?.kind === 'dungeon') return fail(`${m.name} is already in a dungeon.`);
+      if (c.state.phase.p === 'dead') return fail(`${m.name} is dead.`);
+      const target = Math.min(c.state.char.level, d.maxLevel);
+      snaps.push(snapshotOf(c.state, this.data, c.accountId, m.role, Math.max(d.minLevel, target)));
+    }
+    const level = Math.round(snaps.reduce((a, s) => a + s.level, 0) / snaps.length);
+    const side = factionOfRace(this.data, this.chars.get(g.leader_id)!.state.char.race);
+    const need: Role[] = [];
+    const has = (r: Role) => snaps.filter(s => s.role === r).length + need.filter(x => x === r).length;
+    const tanks = d.size > 5 ? 2 : 1, healers = d.size > 5 ? 2 : 1;
+    while (has('tank') < tanks && snaps.length + need.length < d.size) need.push('tank');
+    while (has('healer') < healers && snaps.length + need.length < d.size) need.push('healer');
+    while (snaps.length + need.length < d.size) need.push('dps');
+    need.forEach((r, i) => snaps.push(hireling(this.data, r, level, side, i)));
+    const result = simulateRun(this.data, d, snaps, seed >>> 0);
+    const ends = now + result.durationMs;
+    this.db.transaction(() => {
+      const runId = Number(this.db.prepare(`INSERT INTO dungeon_runs (group_id, dungeon, started, ends, snapshots, result) VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(g.id, g.dungeon, now, ends, JSON.stringify(snaps), JSON.stringify(result)).lastInsertRowid);
+      this.db.prepare(`UPDATE dungeon_groups SET status = 'running', run_id = ? WHERE id = ?`).run(runId, g.id);
+      for (const m of members) {
+        const c = this.chars.get(m.accountId)!;
+        c.state.action = { kind: 'dungeon', run: runId, dungeon: g.dungeon, until: ends };
+        c.state.phase = { p: 'work', from: now, until: ends };
+        this.persist(c);
+      }
+    })();
+    for (const m of members) this.emit('state', m.accountId);
+    this.emit('guild');
+    return OK;
+  }
+
+  /** Hand out the rewards of runs that have ended. */
+  private deliverRuns(now: number): void {
+    const due = this.db.prepare(`SELECT * FROM dungeon_runs WHERE delivered = 0 AND ends <= ?`).all(now) as RunRow[];
+    for (const run of due) {
+      const result = JSON.parse(run.result) as RunResult;
+      const snaps = JSON.parse(run.snapshots) as Snapshot[];
+      const players = snaps.filter(s => !s.hireling).length;
+      this.db.transaction(() => {
+        snaps.forEach((s, i) => {
+          if (s.hireling || s.accountId == null) return;
+          const c = this.chars.get(s.accountId);
+          if (!c) return;
+          this.advanceChar(c, now);
+          applyRunRewards(c.state, this.data, result, i, players);
+          this.persist(c);
+        });
+        this.db.prepare(`UPDATE dungeon_runs SET delivered = 1 WHERE id = ?`).run(run.id);
+        this.db.prepare(`UPDATE dungeon_groups SET status = 'done' WHERE id = ?`).run(run.group_id);
+      })();
+      const leader = snaps.find(s => !s.hireling)?.name ?? 'A group';
+      const name = this.data.dungeons[run.dungeon]?.name ?? 'a dungeon';
+      if (result.cleared) this.addFeed(snaps.find(s => !s.hireling)?.accountId ?? 0, 'dungeon', `${leader}'s group cleared ${name}!`, now);
+      for (const s of snaps) if (s.accountId != null && !s.hireling) this.emit('state', s.accountId);
+      this.emit('guild');
+    }
+  }
+
+  /** A run's full result and snapshots, for the replay. */
+  replay(runId: unknown): { run: RunResult; snapshots: Snapshot[] } | null {
+    if (!isInt(runId, 1, 1e12)) return null;
+    const r = this.db.prepare(`SELECT * FROM dungeon_runs WHERE id = ?`).get(runId) as RunRow | undefined;
+    return r ? { run: JSON.parse(r.result), snapshots: JSON.parse(r.snapshots) } : null;
+  }
+
+  private groupsSnapshot(nameOf: (id: number) => string): DungeonGroup[] {
+    const rows = this.db.prepare(`SELECT * FROM dungeon_groups WHERE status IN ('open', 'running') OR t > ? ORDER BY id DESC LIMIT 30`)
+      .all(this.clock() - 3 * 86_400_000) as GroupRow[];
+    return rows.filter(r => r.status !== 'cancelled').map(r => {
+      const run = r.run_id ? this.db.prepare(`SELECT id, started, ends, snapshots, result FROM dungeon_runs WHERE id = ?`).get(r.run_id) as RunRow | undefined : undefined;
+      let summary: RunSummary | undefined;
+      if (run) {
+        const res = JSON.parse(run.result) as RunResult, snaps = JSON.parse(run.snapshots) as Snapshot[];
+        const done = run.ends <= this.clock();
+        summary = {
+          id: run.id, started: run.started, ends: run.ends, total: this.data.dungeons[r.dungeon]?.encounters.length ?? 0,
+          // The outcome stays hidden until the run is over (watch the replay as it happens).
+          cleared: done && res.cleared, progress: done ? res.progress : 0,
+          members: snaps.map(s => ({ name: s.name, role: s.role, hireling: !!s.hireling, cls: s.cls })),
+          loot: done ? res.loot.map(l => ({ item: l.item, winner: l.winner == null ? null : snaps[l.winner]?.name ?? null })) : [],
+        };
+      }
+      return { id: r.id, t: r.t, dungeon: r.dungeon, leaderId: r.leader_id, leader: nameOf(r.leader_id), members: JSON.parse(r.members), status: r.status, ...(summary ? { run: summary } : {}) };
+    });
+  }
+
   // ------------------------------------------------------------------ chat + feed
 
   chat(accountId: number, text: unknown): Result {
@@ -457,6 +629,7 @@ export class World {
       requests: (this.db.prepare(`SELECT * FROM guild_requests WHERE open = 1 OR t > ? ORDER BY open DESC, id DESC LIMIT 40`).all(this.clock() - 3 * 86_400_000) as
         { id: number; t: number; account_id: number; item: number; count: number; filled: number; note: string; open: number }[])
         .map((r): GuildRequest => ({ id: r.id, t: r.t, who: nameOf(r.account_id), accountId: r.account_id, item: r.item, count: r.count, filled: r.filled, note: r.note, open: !!r.open })),
+      groups: this.groupsSnapshot(nameOf),
       orders: (this.db.prepare(`SELECT * FROM craft_orders WHERE open = 1 OR t > ? ORDER BY open DESC, id DESC LIMIT 40`).all(this.clock() - 3 * 86_400_000) as OrderRow[])
         .map((r): CraftOrder => ({
           id: r.id, t: r.t, who: nameOf(r.account_id), accountId: r.account_id, recipe: r.recipe, count: r.count,
@@ -495,6 +668,7 @@ export function activityText(s: GameState, data: GameData): string {
     case 'craft': { const r = data.recipes[a.recipe]; return r ? `${r.skill === 'cooking' ? 'Cooking' : 'Crafting'} ${r.name}` : 'Crafting'; }
     case 'travel': return `Travelling to ${data.zones.find(z => z.id === a.to)?.name ?? 'somewhere'}`;
     case 'quest': return `Questing: ${data.quests[a.quest]?.name ?? 'a quest'}`;
+    case 'dungeon': return `In ${data.dungeons?.[a.dungeon]?.name ?? 'a dungeon'}`;
   }
 }
 

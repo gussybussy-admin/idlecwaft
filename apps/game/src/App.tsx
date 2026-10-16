@@ -7,6 +7,7 @@ import { PowerBar, SpellbookPage, TalentsPage } from './spells.js';
 import { BagsPanel, CharacterPage, CombatPage, FishingPage, GatherPage, LogPage, SKILL_ICON, TownPage } from './pages.js';
 import { CraftPage, SkinningPage } from './crafting.js';
 import { QuestsPage, ReputationPage } from './quests.js';
+import { DungeonsPage } from './dungeons.js';
 import { Bar, fmtTime, hideTip, Icon, ItemIcon, Money, TooltipHost } from './ui.js';
 import { randomLook, type Look } from './character.js';
 import { Diorama } from './diorama.js';
@@ -21,7 +22,7 @@ function CharacterPreview({ look }: { look: Look }) {
 }
 
 const CRAFTING: Profession[] = ['cooking', 'firstaid', 'alchemy', 'blacksmithing', 'enchanting', 'engineering', 'leatherworking', 'tailoring'];
-type Page = 'combat' | Profession | 'character' | 'spells' | 'talents' | 'quests' | 'reputation' | 'bags' | 'town' | 'travel' | 'guild' | 'log';
+type Page = 'combat' | Profession | 'character' | 'spells' | 'talents' | 'quests' | 'reputation' | 'dungeons' | 'bags' | 'town' | 'travel' | 'guild' | 'log';
 
 export function App() {
   useSyncExternalStore(game.subscribe, game.getVersion);
@@ -54,6 +55,7 @@ export function App() {
         {page === 'travel' && <TravelPage s={s} data={data} />}
         {page === 'spells' && <SpellbookPage s={s} data={data} />}
         {page === 'quests' && <QuestsPage s={s} data={data} />}
+        {page === 'dungeons' && <DungeonsPage s={s} data={data} g={g} />}
         {page === 'reputation' && <ReputationPage s={s} data={data} />}
         {page === 'talents' && <TalentsPage s={s} data={data} />}
       </div></main>
@@ -105,6 +107,7 @@ function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; pag
   const cls = data.classes.find(c => c.id === s.char.cls)?.name;
   const actionPage: Page | null = !s.action ? null : s.action.kind === 'fight' ? 'combat' : s.action.kind === 'travel' ? 'travel' : s.action.kind === 'fish' ? 'fishing'
     : s.action.kind === 'quest' ? 'quests'
+    : s.action.kind === 'dungeon' ? 'dungeons'
     : s.action.kind === 'craft' ? (data.recipes[s.action.recipe]?.skill ?? null) : data.nodes[s.action.node]?.skill ?? null;
   const item = (p: Page, icon: string, label: string, right?: string) => (
     <button className={`${page === p ? 'on' : ''} ${actionPage === p ? 'active-action' : ''}`} onClick={() => setPage(p)}>
@@ -134,6 +137,7 @@ function Sidebar({ s, data, page, setPage }: { s: GameState; data: GameData; pag
         </button>
         <div className="group">Adventure</div>
         {item('combat', 'Ability_Warrior_OffensiveStance', 'Combat', String(s.char.level))}
+        {item('dungeons', 'INV_Misc_Head_Dragon_01', 'Dungeons', (game.guild?.groups ?? []).filter(x => x.status === 'open').length ? `${(game.guild?.groups ?? []).filter(x => x.status === 'open').length} forming` : undefined)}
         {item('quests', 'INV_Misc_Note_02', 'Quests', readyQuests ? `${readyQuests} ready` : String(Object.keys(s.quests).length))}
         <div className="group">Gathering</div>
         {skill('mining')}{skill('herbalism')}{skill('skinning')}{skill('fishing')}
@@ -162,6 +166,7 @@ function ActivityLine({ s, data }: { s: GameState; data: GameData }) {
     : a.kind === 'gather' ? `${data.nodes[a.node]?.skill === 'mining' ? 'Mining' : 'Gathering'} ${data.nodes[a.node]?.name}`
     : a.kind === 'travel' ? `Travelling to ${data.zones.find(z => z.id === a.to)?.name}`
     : a.kind === 'quest' ? `${data.quests[a.quest]?.task?.label ?? 'Questing'}`
+    : a.kind === 'dungeon' ? `In ${data.dungeons[a.dungeon]?.name ?? 'a dungeon'} with the group`
     : a.kind === 'craft' ? `Crafting ${data.recipes[a.recipe]?.name ?? ''}`
     : 'Fishing';
   return <div className="sub" style={{ color: a ? 'var(--gold-soft)' : undefined }}>{text}</div>;

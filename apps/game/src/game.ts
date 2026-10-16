@@ -3,7 +3,7 @@
 // to "server now", which gives smooth animation without trusting anything the client computes.
 import {
   advance, applyCommand, type Appearance, type ChatMessage, type ClientMessage, type Command, type FeedItem,
-  type GameData, type GameState, type GuildSnapshot, type ServerMessage, type SimEvent, type Summary,
+  type GameData, type GameState, type GuildSnapshot, type Role, type RunResult, type ServerMessage, type SimEvent, type Snapshot, type Summary,
 } from '@idle/sim';
 
 const TICK_MS = 200;
@@ -134,6 +134,7 @@ export class Game {
         break;
       case 'away': this.away = m.summary; break;
       case 'result': this.pending.get(m.id)?.(m); this.pending.delete(m.id); break;
+      case 'replay': { const w = this.replayWaiters.get(m.id); this.replayWaiters.delete(m.id); w?.({ run: m.run, snapshots: m.snapshots }); break; }
       case 'guild': this.guild = m.guild; break;
       case 'chat': this.pushChat(m.msg); break;
       case 'feed': this.pushFeed(m.item); break;
@@ -202,6 +203,25 @@ export class Game {
   orderOp(op: 'claim' | 'deliver' | 'cancel', order: number): Promise<boolean> {
     return this.request({ t: 'order', id: this.nextId++, op, order });
   }
+  groupOp(op: 'create', dungeon: number, role: Role): Promise<boolean>;
+  groupOp(op: 'join', group: number, role: Role): Promise<boolean>;
+  groupOp(op: 'leave' | 'start' | 'cancel', group: number): Promise<boolean>;
+  groupOp(op: 'create' | 'join' | 'leave' | 'start' | 'cancel', target: number, role?: Role): Promise<boolean> {
+    const id = this.nextId++;
+    if (op === 'create') return this.request({ t: 'group', id, op, dungeon: target, role: role! });
+    if (op === 'join') return this.request({ t: 'group', id, op, group: target, role: role! });
+    return this.request({ t: 'group', id, op, group: target });
+  }
+  /** A run's full replay (events + snapshots). */
+  replay(run: number): Promise<{ run: RunResult; snapshots: Snapshot[] } | null> {
+    return new Promise(resolve => {
+      const id = this.nextId++;
+      this.replayWaiters.set(id, resolve);
+      this.send({ t: 'replay', id, run });
+      window.setTimeout(() => { if (this.replayWaiters.delete(id)) resolve(null); }, 15000);
+    });
+  }
+  private replayWaiters = new Map<number, (r: { run: RunResult; snapshots: Snapshot[] } | null) => void>();
   chat(text: string): void { this.send({ t: 'chat', text }); }
   markChatRead(reading: boolean): void { this.readingChat = reading; if (reading && this.unreadChat) { this.unreadChat = 0; this.bump(); } }
 

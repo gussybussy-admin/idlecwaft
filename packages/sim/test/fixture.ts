@@ -73,6 +73,10 @@ export function fixture(): GameData {
         races: 0, classes: 0, sides: [...BOTH], kills: [], items: [], task: { ms: 90_000, label: 'Carry the report', grants: [] },
         xp: 100, money: 10, moneyMax: 0, rewItems: [], choice: [], rep: [], objectives: 'Take the report to Scout Grumble.' },
     },
+    dungeons: {
+      1: { id: 1, name: 'Test Hold', map: 999, zone: 1, minLevel: 8, maxLevel: 12, size: 5,
+        encounters: [{ mobs: [[100, 3]] }, { mobs: [[100, 2]] }, { boss: 103, mobs: [[103, 1]] }] },
+    },
     enchants: { 41: { id: 41, name: 'Health +25', stats: [], hp: 25, mana: 0, armor: 0, ap: 0, dmg: 0 } },
     zones: [{
       id: 1, name: 'Testwood', map: 0, x: 0, y: 0, city: false, levelMin: 1, levelMax: 3,
@@ -95,6 +99,10 @@ export function fixture(): GameData {
         goldMin: 1, goldMax: 5, loot: 'creature:100', skin: 'skin:100', hostile: [...BOTH], rep: [{ faction: 72, value: 100, maxRank: 4 }] },
       101: { id: 101, name: 'Test Ogre', subname: '', levelMin: 12, levelMax: 12, rank: 1, type: 7, displayIds: [2], attackMs: 2000,
         stats: [{ hp: 2000, dmgMin: 60, dmgMax: 80, armor: 400 }], goldMin: 100, goldMax: 200, loot: null, hostile: [...BOTH] },
+      103: { id: 103, name: 'Test Chieftain', subname: '', levelMin: 12, levelMax: 12, rank: 1, type: 7, displayIds: [4], attackMs: 2000,
+        stats: [{ hp: 1200, dmgMin: 40, dmgMax: 50, armor: 100 }], goldMin: 50, goldMax: 80, loot: 'boss:103', hostile: [...BOTH],
+        abilities: [{ spell: 999, name: 'Fire Stomp', aoe: true, target: 'tank', firstMs: [3000, 3000], repeatMs: [6000, 6000], chance: 100,
+          effects: [{ k: 'damage', school: 2, min: 12, max: 12 }] }] },
       102: { id: 102, name: 'Testwood Guard', subname: '', levelMin: 2, levelMax: 2, rank: 0, type: 7, displayIds: [3], attackMs: 2000,
         stats: [{ hp: 60, dmgMin: 2, dmgMax: 4, armor: 20 }], goldMin: 0, goldMax: 0, loot: null, hostile: [...H] },
     },
@@ -129,6 +137,7 @@ export function fixture(): GameData {
     loot: {
       'creature:100': loot({ entries: [{ item: 1, chance: 60, min: 1, max: 1 }, { item: 7, chance: 50, min: 1, max: 1, quest: true }] }),
       'go:200': loot({ entries: [{ item: 2, chance: 100, min: 1, max: 2 }] }),
+      'boss:103': loot({ entries: [{ item: 12, chance: 100, min: 1, max: 1 }, { item: 23, chance: 100, min: 1, max: 1 }] }),
       'skin:100': loot({ entries: [{ item: 20, chance: 100, min: 1, max: 1 }] }),
       'de:1': loot({ entries: [{ item: 21, chance: 100, min: 2, max: 2 }] }),
       'fish:1': loot({ groups: [[{ item: 3, chance: 50, min: 1, max: 1 }, { item: 4, chance: 0, min: 1, max: 1 }]] }),

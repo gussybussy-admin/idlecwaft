@@ -3,7 +3,7 @@ import {
   advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, planTravel, playerStats,
   rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, trainSpells, knownSpells,
   learnTalent, pointsSpent, modded, activeTalentEffects, resetTalents, resetCost,
-  disenchant, unlearnProfession, itemCategory, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
+  disenchant, unlearnProfession, itemCategory, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
   type GameState, type SimEvent,
 } from '../src/index.js';
 import { fixture } from './fixture.js';
@@ -583,5 +583,62 @@ describe('professions and commands', () => {
     const snapshot = clone(s);
     advance(s, data, T0 + 120_000);
     expect(s.inventory).toEqual(snapshot.inventory);
+  });
+});
+
+describe('dungeons: the group simulation', () => {
+  const dungeon = data.dungeons[1];
+  const char = (cls: number, level = 12) => {
+    const s = newGame(data, { name: cls === 1 ? 'Tanky' : 'Mendy', race: 1, cls, seed: 3, now: T0 });
+    s.char.level = level;
+    s.spells = (data.classSpells[cls] ?? []).map(o => o.spell);
+    s.combatSkills = { 95: level * 5, 162: level * 5, 43: level * 5 };
+    return s;
+  };
+  const group = (roles: Role[]) => roles.map((role, i) =>
+    snapshotOf(char(role === 'tank' ? 1 : 8), data, 100 + i, role, 12));
+
+  it('measures damage per second with the real fight engine', () => {
+    expect(measureDps(char(1), data, 12)).toBeGreaterThan(5);
+    expect(measureDps(char(8), data, 12)).toBeGreaterThan(5);
+  });
+
+  it('is deterministic: same snapshots and seed give the same run', () => {
+    const g = group(['tank', 'healer', 'dps', 'dps', 'dps']);
+    const a = simulateRun(data, dungeon, g, 7), b = simulateRun(data, dungeon, clone(g), 7);
+    expect(JSON.stringify(b)).toBe(JSON.stringify(a));
+    expect(JSON.stringify(simulateRun(data, dungeon, g, 8).events)).not.toBe(JSON.stringify(a.events));
+  });
+
+  it('a full group clears; roles matter', () => {
+    const full = group(['tank', 'healer', 'dps', 'dps', 'dps']);
+    const runs = [1, 2, 3, 4, 5].map(seed => simulateRun(data, dungeon, full, seed));
+    expect(runs.filter(r => r.cleared).length).toBeGreaterThanOrEqual(4);
+    const r = runs.find(x => x.cleared)!;
+    expect(r.kills.filter(k => k === 103)).toHaveLength(1);
+    expect(r.xp.every(x => x > 0)).toBe(true);
+    // Without a healer the same fights cost more lives (on real data they mostly wipe; see dev/dungeon-balance.ts).
+    const deaths = (rs: RunResult[]) => rs.reduce((n, x) => n + x.events.filter(e => e.k === 'die' && !e.mob).length, 0);
+    const noHealer = [1, 2, 3, 4, 5].map(seed => simulateRun(data, dungeon, group(['tank', 'dps', 'dps', 'dps', 'dps']), seed));
+    expect(deaths(noHealer)).toBeGreaterThan(deaths(runs));
+  });
+
+  it('need before greed: the sword goes to the class that can use it, never to a hireling', () => {
+    const g = group(['tank', 'healer', 'dps', 'dps', 'dps']);
+    g[3] = { ...g[3], hireling: true, accountId: null };
+    const r = [1, 2, 3, 4, 5, 6].map(seed => simulateRun(data, dungeon, g, seed)).find(x => x.cleared)!;
+    const sword = r.loot.find(l => l.item === 12)!;
+    expect(sword.winner).toBe(0); // the fighter (swords); mages can't use them
+    expect(sword.rolls.find(x => x.member === 0)!.need).toBe(true);
+    expect(sword.rolls.some(x => x.member === 3)).toBe(false);
+    expect(canUse(data, g[1], data.items[12])).toBe(false);
+  });
+
+  it('fire resistance softens fire abilities', () => {
+    const g = group(['tank', 'healer', 'dps', 'dps', 'dps']);
+    const taken = (snaps: Snapshot[]) => simulateRun(data, dungeon, snaps, 3).events
+      .filter(e => e.k === 'hit' && e.mob && e.spell === 999).reduce((a, e) => a + (e as { amt: number }).amt, 0);
+    const resisted = g.map(sn => ({ ...sn, resist: [0, 0, 60, 0, 0, 0, 0] }));
+    expect(taken(resisted)).toBeLessThan(taken(g));
   });
 });

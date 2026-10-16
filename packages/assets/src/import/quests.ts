@@ -5,8 +5,9 @@ import { PATCH_1_12, type Row, type VMangos } from './vmangos.js';
 import { SKILL_LINE } from './professions.js';
 
 const ALLIANCE_RACES = 1 | 4 | 8 | 64, HORDE_RACES = 2 | 16 | 32 | 128;
-// Quest types idle play can't do yet: PvP, raid, dungeon, world event (dungeons and raids arrive in Phases 5-6).
-const SKIP_TYPES = new Set([41, 62, 81, 82]);
+// Quest types idle play can't do yet: PvP, raid, world event (raids arrive in Phase 6). Dungeon quests
+// (type 81) progress through dungeon runs.
+const SKIP_TYPES = new Set([41, 62, 82]);
 const METHOD_DISABLED = 1;
 const ITEM_CLASS_QUEST = 12;
 const TASK_MAX_MS = 10 * 60_000;

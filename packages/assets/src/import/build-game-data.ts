@@ -14,6 +14,7 @@ import { buildClassSpells } from './class-spells.js';
 import { buildTalents } from './talents.js';
 import { buildEnchants, buildRecipes, buildSkillRanks } from './professions.js';
 import { buildFactions, buildQuests, killReputation } from './quests.js';
+import { buildDungeons } from './dungeons.js';
 
 const LOCKTYPE_HERBALISM = 2, LOCKTYPE_MINING = 3, LOCK_KEY_SKILL = 2;
 const GO_TYPE_CHEST = 3;
@@ -179,6 +180,17 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
   zones.sort((x, y) => x.map - y.map || x.levelMin - y.levelMin || x.name.localeCompare(y.name));
   log(`zones: ${zones.length}, creatures: ${Object.keys(creatures).length}, nodes: ${Object.keys(nodes).length}`);
 
+  // ---- dungeons: instance creatures join the creature table (bosses, trash, their abilities)
+  const dungeons = buildDungeons(client, vm, zl, {
+    creatures, items,
+    creatureDef: t => {
+      const def = creatureDef(t, classStats, vm, items, attackers(Number(t.faction)));
+      if (def && onKillRep.has(def.id)) def.rep = onKillRep.get(def.id);
+      return def;
+    },
+  });
+  log(`dungeons: ${Object.values(dungeons).map(d => `${d.name} (${d.encounters.filter(e => e.boss).length} bosses)`).join(', ')}`);
+
   // ---- flight paths
   const tn = client.dbc('TaxiNodes'); // 0 id, 1 map, 2 x, 3 y, 5 name, 14 horde mount, 15 alliance mount
   const taxiNodes: Record<number, TaxiNode> = {};
@@ -327,7 +339,7 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
     classes: classes.rows().map(r => ({ id: classes.u32(r, 0), name: classes.str(r, 5) })),
     raceClasses, startZones, classSkills, skillNames, spells, classSpells, classTrainerZones, talents, talentTabs,
     levelStats, classStats: classStatsOut, skillRanks,
-    zones, creatures, items: itemDefs, nodes, recipes, enchants, quests, factions, loot, taxiNodes, taxiPaths,
+    zones, creatures, items: itemDefs, nodes, recipes, enchants, quests, factions, dungeons, loot, taxiNodes, taxiPaths,
   };
   const out = path.join(opts.cacheDir, 'data');
   fs.mkdirSync(out, { recursive: true });
@@ -392,6 +404,9 @@ function itemDef(t: Row, icons: Map<number, string>, vm: VMangos, durations: Map
     dmgMin: Number(t.dmg_min1), dmgMax: Number(t.dmg_max1), delayMs: Number(t.delay), stats,
     itemLevel: Number(t.item_level),
   };
+  const resist = [0, Number(t.holy_res), Number(t.fire_res), Number(t.nature_res), Number(t.frost_res), Number(t.shadow_res), Number(t.arcane_res)];
+  if (resist.some(Boolean)) def.resist = resist;
+  if (Number(t.block)) def.block = Number(t.block);
   if (Number(t.required_reputation_faction)) def.reqRep = [Number(t.required_reputation_faction), Number(t.required_reputation_rank)];
   if (Number(t.disenchant_id) && def.quality >= 2) {
     const key = `de:${Number(t.disenchant_id)}`;

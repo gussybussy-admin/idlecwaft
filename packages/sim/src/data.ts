@@ -4,6 +4,7 @@
 import type { ClassSpellOffer, SpellDef } from './spells.js';
 import type { TalentDef, TalentTabDef } from './talents.js';
 import type { FactionDef, QuestDef } from './quests.js';
+import type { CreatureAbility, DungeonDef } from './dungeons.js';
 import type { Profession } from './state.js';
 
 export type ItemId = number;
@@ -49,6 +50,9 @@ export interface ItemDef {
   itemLevel?: number;
   /** What disenchanting it yields (greens and better). */
   disenchant?: LootRef;
+  /** Resistances by school index (1 holy .. 6 arcane), and shield block value. */
+  resist?: number[];
+  block?: number;
   /** Reputation rank (index into REP_RANKS) needed with a faction to buy it. */
   reqRep?: [number, number];
   /** Instant-use potion: health and mana restored (average). Used automatically in fights when low. */
@@ -79,6 +83,8 @@ export interface CreatureDef {
   loot: LootRef | null;
   /** Skinning loot (beasts), and the Skinning skill it needs. */
   skin?: LootRef;
+  /** Spells it casts in fights (the group simulation's boss mechanics). */
+  abilities?: CreatureAbility[];
   /** Reputation for killing it: faction, amount, highest rank it can take you to; `side` limits it to one team. */
   rep?: { faction: number; value: number; maxRank: number; side?: Faction }[];
   /** Player factions that can attack it (a Stormwind guard is attackable by the Horde only). */
@@ -173,6 +179,7 @@ export interface GameData {
   skillRanks: Record<Profession, SkillRank[]>;
   enchants: Record<number, EnchantDef>;
   quests: Record<number, QuestDef>;
+  dungeons: Record<number, DungeonDef>;
   factions: Record<number, FactionDef>;
   zones: ZoneDef[];
   creatures: Record<number, CreatureDef>;

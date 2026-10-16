@@ -33,7 +33,9 @@ export type Action =
   | { kind: 'craft'; recipe: number; count?: number; slot?: Slot }
   | { kind: 'travel'; to: number }
   /** A quest's timed objective (talk to, deliver, use, escort). */
-  | { kind: 'quest'; quest: number };
+  | { kind: 'quest'; quest: number }
+  /** In a dungeon with the group until the run ends (started by the server, not by a command). */
+  | { kind: 'dungeon'; run: number; dungeon: number; until: number };
 
 export interface Mob { id: number; level: number; hp: number; maxHp: number }
 

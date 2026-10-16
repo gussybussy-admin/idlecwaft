@@ -158,6 +158,16 @@ export function createServer({ db, world, gameDataJson, clock = Date.now, launch
           return reply(msg.op === 'create' ? world.createRequest(acct.accountId, msg.item, msg.count, msg.note)
             : msg.op === 'fill' ? world.fillRequest(acct.accountId, msg.request, msg.count)
             : msg.op === 'cancel' ? world.cancelRequest(acct.accountId, msg.request) : { ok: false, error: 'Bad op.' });
+        case 'group':
+          return reply(msg.op === 'create' ? world.createGroup(acct.accountId, msg.dungeon, msg.role)
+            : msg.op === 'join' ? world.joinGroup(acct.accountId, msg.group, msg.role)
+            : msg.op === 'leave' || msg.op === 'cancel' ? world.leaveGroup(acct.accountId, msg.group)
+            : msg.op === 'start' ? world.startGroup(acct.accountId, msg.group) : { ok: false, error: 'Bad op.' });
+        case 'replay': {
+          const r = world.replay(msg.run);
+          if (!r) return reply({ ok: false, error: 'No such run.' });
+          return send(ws, { t: 'replay', id: msg.id, run: r.run, snapshots: r.snapshots });
+        }
         case 'order':
           return reply(msg.op === 'create' ? world.createOrder(acct.accountId, msg.recipe, msg.count, msg.provide, msg.tip, msg.note)
             : msg.op === 'claim' ? world.claimOrder(acct.accountId, msg.order)

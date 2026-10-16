@@ -32,6 +32,9 @@ Living document for the core systems. Sections marked *TBD* get filled in as eac
 | Quest objectives | Kills and drops play out in fights; **everything else becomes a timed task** (Phase 4). |
 | Healing | **Food heals; nothing else does between fights.** Natural regeneration is 1 HP per minute, so fishing and cooking are what keep a fighter going; Apprentice Cooking, Fishing and First Aid are free from level 1 (Phase 4). |
 | Professions | **Two primary professions** at a time (vanilla rule), unlearnable; secondary skills are free (Phase 4c). |
+| Dungeon groups | **NPC hirelings fill empty slots** (weaker than geared players), so two friends can run a 5-man (Phase 5). |
+| Dungeon loot | **Need before greed**: members who can use an item roll Need and beat Greed rolls; hirelings never roll (Phase 5). |
+| Dungeon time | **Characters are busy for the run** (its simulated length, tens of minutes), then the rewards arrive (Phase 5). |
 
 ## Client data (Phase 0 recon, build 5875 enUS)
 
@@ -241,7 +244,54 @@ focused, ~5 fps when blurred and not at all while the tab is hidden; models load
 Floating combat text names the spell and shows heals. It reconnects automatically if the server
 restarts.
 
-## Group simulation — *TBD (Phases 5–6)*
+## Dungeons and the group simulation (Phase 5)
+
+**Dungeons from data.** The 5-man instances come from LFGDungeons.dbc (names, level ranges) matched to
+Map.dbc; their creatures are the VMaNGOS spawns on each instance map. Bosses are found, not listed:
+elites that spawn once and have at least two uncommon-or-better items that really drop (≥3%,
+following loot references). Instances with several runs are split into wings around each wing's
+final boss (Scarlet Monastery's four wings, Dire Maul East/West/North, Stratholme Live/Undead, Lower
+and Upper Blackrock Spire; UBRS is a 10-player run). A run is ordered from the entrance (the spawn
+farthest from the final boss) toward the final boss; trash is clustered into packs (18 yd) and up to
+four packs guard each boss. 25 runs from Ragefire Chasm to Scholomance; dungeon quests (type 81) are
+back, credited by runs.
+
+**Boss mechanics from data.** Each creature's VMaNGOS spell list (creature_spells: spell, target,
+timers, chance) is normalized into abilities: direct and area damage by school, damage over time,
+crowd control, self-heals, enrages, summoned adds, extra attacks and knockbacks (the tank loses the
+mob for 1.5 s). Spell damage is reduced by the target's resistance (vanilla's average:
+`min(75%, R / (5 · level) · 75%)`), so fire/shadow/nature resistance gear matters.
+
+**Snapshots.** When the leader starts, every member's character is snapshotted: role, health, armor,
+dodge and Defense, resistances, damage per second *measured* by fighting a training dummy for 40 s
+with the real fight engine (their spells, talents, gear and mana), and every spammable heal rank
+they know (healers down-rank: the cheapest heal that covers the missing health). Empty slots get
+hirelings (a tank and a healer first): a warrior, priest or mage of the group's level in the best
+green/blue items their class can use at that level, at 80% power.
+
+**The fight.** 1-second steps. Damage dealers hit the focus target; the healer casts real heal ranks
+with cast times, mana (little regeneration while casting) and spell pushback; the tank holds the
+mobs — if the tank is dead, crowd-controlled or knocked back, mobs hit the healer (healing draws
+threat) or anyone. At most three mobs fight at once (the rest are crowd-controlled). Mob melee uses
+the same miss/dodge/armor formulas as solo combat. Between pulls: 20 s walking, 15 s resting (full
+health and mana). A wiped pull is retried twice (90 s corpse run each); the third wipe ends the run.
+Result: whether it cleared, how far it got, its length, kills, per-member experience (kill XP × the
+vanilla group bonus 1.4 for five, split), gold, and loot.
+
+**Loot.** Each boss's loot is rolled once; per item, members who can use it (weapon/armor
+proficiency, level) roll Need, everyone else Greed; highest Need wins, else highest Greed; hirelings
+never roll. Trash gold is shared. Each member also rolls their own quest-only drops from the kills.
+
+**Async play.** Members sign up on the guild's group board with a role their class can fill; the
+leader starts whenever they like (no one needs to be online). The server simulates the run at once
+and stores it; members are busy (`dungeon` action) for its simulated length, and the rewards
+arrive when it ends. Everyone can watch the run as a 3D replay: the party in their real looks and
+gear against the real creature models, with health bars, floating numbers and a combat log, at
+1×/4×/16×.
+
+Balance (hireling-only groups, dev/dungeon-balance.ts): full groups clear most dungeons at level; with
+no healer or no tank most runs wipe early. The hardest level-60 runs (Scholomance, Lower Blackrock
+Spire, Stratholme Undead) need better-than-hireling gear. To revisit in Phase 7.
 
 ## Idleized content
 
@@ -254,7 +304,8 @@ restarts.
 | Guild: server, accounts, roster, bank, requests, crafting orders, chat, feed | done (Phases 3, 4c) |
 | Quests (non-instance), reputation | done (Phase 4d) |
 | Playtest feedback: filtering, categories, activity scenes, visible gear | done (Phase 4e) |
-| Dungeons, raids (and their quests) | Phases 5, 6 |
+| Dungeons (25 runs incl. UBRS 10-player), group simulation, need-before-greed loot, 3D replays | done (Phase 5) |
+| Raids, world bosses, PvP | Phases 6, later |
 
 ### Phase 4e — playtest feedback
 
@@ -278,6 +329,9 @@ From playing Phase 4 with the guild:
 
 ### Known gaps
 
+- Some dungeon bosses aren't detected (Rhahk'Zor, several in Zul'Farrak) because their loot is thin;
+  scripted encounters (VanCleef's adds, Balnazzar's transformation) are plain fights. Groups can't yet
+  be watched live by everyone at the same moment (the replay is available as soon as the run starts).
 - Lockpicking, pets (hunter/warlock), totems, poisons/imbues and crowd control aren't idleized yet;
   hunters fight in melee until ranged weapons arrive.
 - Profession specializations (Elemental/Dragonscale, Gnomish/Goblin, ...) and their reputations.
