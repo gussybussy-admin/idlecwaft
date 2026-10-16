@@ -364,6 +364,9 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
     levelStats, classStats: classStatsOut, skillRanks,
     zones, creatures, items: itemDefs, nodes, recipes, enchants, quests, factions, dungeons, loot, taxiNodes, taxiPaths,
   };
+  // Hunter pet families and their diets (CreatureFamily.dbc: 0 id, 7 pet food mask, 8 name).
+  const cf = client.dbc('CreatureFamily');
+  data.petFamilies = Object.fromEntries(cf.rows().filter(r => cf.u32(r, 7)).map(r => [cf.u32(r, 0), { name: cf.str(r, 8), diet: cf.u32(r, 7) }]));
   attachSounds(client, data);
   log(`sounds: ${data.zones.filter(z => z.sound).length} zones, ${Object.values(data.creatures).filter(c => c.sounds).length} creatures, ${Object.values(data.spells).filter(x => x.sound).length} spells`);
   const out = path.join(opts.cacheDir, 'data');
@@ -410,6 +413,7 @@ function creatureDef(t: Row, classStats: Map<string, Row>, vm: VMangos, items: S
   return {
     id: Number(t.entry), name: String(t.name), subname: String(t.subname ?? ''),
     levelMin, levelMax, rank: Number(t.rank), type: Number(t.type), displayIds, attackMs, stats,
+    ...(Number(t.pet_family) ? { family: Number(t.pet_family) } : {}),
     goldMin: Number(t.gold_min), goldMax: Number(t.gold_max),
     loot: vm.loot('creature_loot_template', Number(t.loot_id), items),
     ...(Number(t.skinning_loot_id) ? { skin: vm.loot('skinning_loot_template', Number(t.skinning_loot_id), items) ?? undefined } : {}),
@@ -433,6 +437,7 @@ function itemDef(t: Row, icons: Map<number, string>, vm: VMangos, durations: Map
   if (resist.some(Boolean)) def.resist = resist;
   if (Number(t.block)) def.block = Number(t.block);
   if (Number(t.container_slots)) def.bagSlots = Number(t.container_slots);
+  if (Number(t.food_type)) def.foodType = Number(t.food_type);
   if (Number(t.bag_family)) def.bagFamily = Number(t.bag_family);
   if (Number(t.required_reputation_faction)) def.reqRep = [Number(t.required_reputation_faction), Number(t.required_reputation_rank)];
   if (Number(t.disenchant_id) && def.quality >= 2) {

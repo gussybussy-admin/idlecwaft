@@ -150,7 +150,7 @@ export interface CombatPhase {
   dots?: Dot[]; shield?: number; targetDodgedAt?: number; selfAvoidedAt?: number;
   mobApMod?: number; mobHastePct?: number;
   /** Your pet: its health this fight and its next swing. */
-  petHp?: number; petSwingAt?: number;
+  petHp?: number; petSwingAt?: number; petSpecialAt?: number;
   /** Hunters get a few shots in from range before the mob reaches them (when no pet holds it). */
   openUntil?: number;
 }
@@ -168,7 +168,7 @@ export interface CombatCtx {
   /** A rogue's weapon poisons. */
   poisons?: Poisons;
   /** Your pet's attack, while it lives. */
-  pet?: { dmgMin: number; dmgMax: number; speedMs: number; ignoresArmor: boolean };
+  pet?: { dmgMin: number; dmgMax: number; speedMs: number; ignoresArmor: boolean; special?: { everyMs: number; mult: number } };
   emitHeal(amount: number, spell: number): void;
   raiseWeaponSkill(): number; // returns the current weapon skill value
 }
@@ -238,7 +238,10 @@ function petSwing(s: GameState, ph: CombatPhase, ctx: CombatCtx): void {
   if (roll < 5) { ctx.emitSwing('pet', 'miss', 0); return; }
   if (roll < 10 && !pet.ignoresArmor) { ctx.emitSwing('pet', 'dodge', 0); return; }
   const crit = roll >= 95;
-  let dmg = int(s.rng, pet.dmgMin, pet.dmgMax) * (crit ? 2 : 1);
+  // Bite / Claw / Lash of Pain when it's ready.
+  const special = pet.special && s.now >= (ph.petSpecialAt ?? 0);
+  if (special) ph.petSpecialAt = s.now + pet.special!.everyMs;
+  let dmg = int(s.rng, pet.dmgMin, pet.dmgMax) * (crit ? 2 : 1) * (special ? pet.special!.mult : 1);
   if (!pet.ignoresArmor) dmg = dmg * (1 - armorReduction(ctx.def.stats[mob.level - ctx.def.levelMin].armor, ctx.st.level));
   dmg = Math.max(1, Math.round(dmg));
   mob.hp -= dmg;

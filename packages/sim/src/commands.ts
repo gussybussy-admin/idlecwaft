@@ -125,11 +125,11 @@ export function applyCommand(s: GameState, data: GameData, c: Command): CommandR
     case 'turnInQuest': return completeQuest(s, data, c.quest, c.choice);
     case 'tame': {
       const def = data.creatures[c.creature];
-      const err = tameError(s, def);
+      const err = tameError(s, def, data);
       if (err) return { ok: false, error: err };
       if (!data.zones.find(z => z.id === s.zone)?.creatures.some(x => x.id === c.creature)) return { ok: false, error: `There are no ${def!.name}s here.` };
       if (s.action?.kind === 'dungeon') return { ok: false, error: "You're in a dungeon." };
-      s.pet = { kind: 'beast', name: def!.name, creature: def!.id, displayId: def!.displayIds[0] ?? 0 };
+      s.pet = { kind: 'beast', name: def!.name, creature: def!.id, displayId: def!.displayIds[0] ?? 0, family: def!.family, happiness: 500 };
       log(s, 'info', `You tame ${def!.name}. It will fight at your side.`);
       return { ok: true };
     }

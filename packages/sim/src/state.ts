@@ -156,6 +156,8 @@ export function migrateState(s: GameState, data?: GameData): GameState {
   s.quests ??= {}; s.questsDone ??= []; s.rep ??= {};
   s.settings.autoSkin ??= true; s.settings.potionBelowPct ??= 35; s.settings.autoDeposit ??= true;
   s.bank ??= {};
+  // Beasts tamed before pets had families and happiness.
+  if (s.pet?.kind === 'beast' && data) { s.pet.family ??= s.pet.creature ? data.creatures[s.pet.creature]?.family : undefined; s.pet.happiness ??= 500; }
   s.stats.crafted ??= 0; s.stats.skinned ??= 0;
   const a = s.action as unknown as { kind: string; recipe?: number } | null;
   if (a?.kind === 'cook') s.action = { kind: 'craft', recipe: a.recipe! }; // pre-4c saves

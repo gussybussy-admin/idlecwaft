@@ -6,7 +6,7 @@ import { poisons, SEARING_MS, STREAM_MS, totems } from './classes.js';
 /** Spell ids shown for totem damage and healing (Searing Totem, Healing Stream). */
 const TOTEM_SEARING = 3599, TOTEM_STREAM = 5394;
 import { equipBag, giveItems, roomFor } from './bags.js';
-import { activePet, HUNTER, PET_REVIVE_MS, petStats } from './pets.js';
+import { activePet, bloodPact, HAPPINESS_PER_FOOD, HAPPINESS_PER_KILL, HAPPY, HUNTER, PET_REVIVE_MS, petFood, petSpecial, petStats } from './pets.js';
 import { factionOfRace } from './data.js';
 import { discoverTaxis, planTravel, RIDING } from './travel.js';
 import {
@@ -44,6 +44,7 @@ export type SimEvent =
   | { t: number; type: 'spawn'; mob: Mob }
   | { t: number; type: 'swing'; who: 'player' | 'mob' | 'pet'; result: 'hit' | 'crit' | 'miss' | 'dodge'; dmg: number; spell?: number; ranged?: boolean; target?: 'pet' }
   | { t: number; type: 'petdeath' }
+  | { t: number; type: 'petfeed'; item: number }
   | { t: number; type: 'heal'; amount: number; spell: number; item?: number }
   | { t: number; type: 'kill'; creature: number; xp: number; gold: number; items: [number, number][] }
   | { t: number; type: 'death' }
@@ -107,6 +108,7 @@ export function playerStats(s: GameState, data: GameData): PlayerStats {
   // Known self buffs (Battle Shout, Arcane Intellect, Fortitude, Devotion Aura, ...) are always on.
   const p = passives(s, data);
   str += (totems(s)?.strength ?? 0); // Strength of Earth Totem
+  sta += bloodPact(s); // the Imp's Blood Pact
   str += p.str; agi += p.agi; sta += p.sta; int_ += p.int; spi += p.spi;
   // Talents: flat stats first, then percentages (Strength of the Earth-style % talents multiply the total).
   const tal = activeTalentEffects(s, data);
@@ -327,6 +329,15 @@ function stepFight(s: GameState, data: GameData, creatureId: number, emit: Emit)
   }
   if (ph.p === 'search') {
     const pet = activePet(s);
+    // A beast that isn't happy eats from your bags before the next fight (its family's diet).
+    if (pet?.kind === 'beast' && (pet.happiness ?? 500) < HAPPY) {
+      const food = petFood(s, data, pet);
+      if (food) {
+        addItem(s, food, -1);
+        pet.happiness = Math.min(1000, (pet.happiness ?? 500) + HAPPINESS_PER_FOOD);
+        emit({ t: s.now, type: 'petfeed', item: food });
+      }
+    }
     if (pet?.dead) {
       // Revive Pet / summon a new demon before the next fight.
       pet.dead = false;
@@ -389,7 +400,7 @@ function stepFight(s: GameState, data: GameData, creatureId: number, emit: Emit)
     useAmmo: () => { if (rs?.ammo) addItem(s, rs.ammo, -1); },
     wand: ranged && !!rs?.wand,
     poisons: poisons(s, data),
-    ...(pst ? { pet: { dmgMin: pst.dmgMin, dmgMax: pst.dmgMax, speedMs: pst.speedMs, ignoresArmor: pet!.kind === 'imp' } } : {}),
+    ...(pst ? { pet: { dmgMin: pst.dmgMin, dmgMax: pst.dmgMax, speedMs: pst.speedMs, ignoresArmor: pet!.kind === 'imp', special: petSpecial(pet!) ?? undefined } } : {}),
     talents: activeTalentEffects(s, data),
     emitSwing: (who, result, dmg, spell) => emit({ t: s.now, type: 'swing', who, result, dmg, ...(spell ? { spell } : {}), ...(ranged && who === 'player' ? { ranged: true } : {}) }),
     emitHeal: (amount, spell) => emit({ t: s.now, type: 'heal', amount, spell }),
@@ -467,6 +478,14 @@ function stepFight(s: GameState, data: GameData, creatureId: number, emit: Emit)
     return;
   }
   maybePotion(s, data, st, emit);
+  // Sacrifice: a Voidwalker gives its life to shield its master from death.
+  if (pet?.kind === 'voidwalker' && (ph.petHp ?? 0) > 0 && s.char.hp < st.maxHp * 0.2) {
+    ph.shield = (ph.shield ?? 0) + Math.round((ph.petHp ?? 0) * 0.8);
+    ph.petHp = 0;
+    pet.dead = true;
+    log(s, 'info', `${pet.name} sacrifices itself to shield you.`);
+    emit({ t: s.now, type: 'petdeath' });
+  }
   if (mob.hp <= 0) return onKill(s, data, def, mob, emit);
 }
 
@@ -499,6 +518,7 @@ function raiseCombatSkill(s: GameState, skill: number, emit: Emit): void {
 
 function onKill(s: GameState, data: GameData, def: CreatureDef, mob: Mob, emit: Emit): void {
   s.char.rage = 0; // rage fades out of combat
+  if (s.pet?.kind === 'beast' && s.char.cls === HUNTER) s.pet.happiness = Math.max(0, (s.pet.happiness ?? 500) - HAPPINESS_PER_KILL);
   const xp = s.char.level < data.maxLevel ? Math.round(killXp(s.char.level, mob.level, def.rank) * KILL_XP_RATE) : 0;
   const gold = def.goldMax ? int(s.rng, def.goldMin, def.goldMax) : 0;
   const rolled = rollLoot(data, def.loot, s.rng, neededQuestItems(s, data));

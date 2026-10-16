@@ -59,6 +59,8 @@ export interface ItemDef {
   elixir?: { stats: [number, number][]; hp: number; armor: number; ap: number; resist: number[]; durationMs: number };
   /** Protection potions: absorb this much damage of one school (1 holy .. 6 arcane). */
   protection?: { school: number; amount: number };
+  /** Pet food type: 1 meat, 2 fish, 3 cheese, 4 bread, 5 fungus, 6 fruit. */
+  foodType?: number;
   /** Bags: how many slots it adds, and (special bags, and the items they hold) the bag family bitmask. */
   bagSlots?: number;
   bagFamily?: number;
@@ -92,6 +94,8 @@ export interface CreatureDef {
   skin?: LootRef;
   /** Spells it casts in fights (the group simulation's boss mechanics). */
   abilities?: CreatureAbility[];
+  /** Hunter pet family (CreatureFamily.dbc), when the beast can be tamed. */
+  family?: number;
   /** Voice and combat sounds (SoundEntries ids): aggro, wound, death, attack. */
   sounds?: { aggro?: number; wound?: number; death?: number; attack?: number };
   /** Reputation for killing it: faction, amount, highest rank it can take you to; `side` limits it to one team. */
@@ -188,6 +192,8 @@ export interface GameData {
   /** Every class spell rank the game uses. */
   spells: Record<number, SpellDef>;
   sounds?: GameSounds;
+  /** Hunter pet families: name and diet (bit n-1 set: eats food type n). */
+  petFamilies?: Record<number, { name: string; diet: number }>;
   /** What each class learns: from its trainers (level, cost), plus starting spells at level 1 for free. */
   classSpells: Record<number, ClassSpellOffer[]>;
   /** Zones with a trainer for each class. */

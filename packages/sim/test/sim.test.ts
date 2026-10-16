@@ -3,7 +3,7 @@ import {
   advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, planTravel, playerStats,
   rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, trainSpells, knownSpells,
   learnTalent, pointsSpent, modded, activeTalentEffects, resetTalents, resetCost,
-  disenchant, unlearnProfession, POISON_INSTANT, itemCategory, bagSpace, roomFor, equipBag, giveItem, activePet, rangedStats, dungeonLoot, nextReset, withRaidBuffs, groupRoles, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
+  disenchant, unlearnProfession, POISON_INSTANT, UNHAPPY, petStats, itemCategory, bagSpace, roomFor, equipBag, giveItem, activePet, rangedStats, dungeonLoot, nextReset, withRaidBuffs, groupRoles, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
   type GameState, type SimEvent,
 } from '../src/index.js';
 import { fixture } from './fixture.js';
@@ -841,5 +841,44 @@ describe('poisons, totems and wands', () => {
     const swings = ev.filter(e => e.type === 'swing' && e.who === 'player' && !e.spell);
     expect(swings.length).toBeGreaterThan(5);
     expect(swings.every(e => e.type === 'swing' && e.ranged)).toBe(true);
+  });
+});
+
+describe('pet happiness and abilities', () => {
+  const d = fixture();
+  d.classStats[3] = d.classStats[1]; d.classStats[9] = d.classStats[8];
+  d.levelStats[1][3] = d.levelStats[1][1]; d.levelStats[1][9] = d.levelStats[1][8];
+  d.petFamilies = { 5: { name: 'Boar', diet: 1 } }; // meat only
+  d.creatures[100] = { ...d.creatures[100], family: 5 };
+  d.items[5] = { ...d.items[5], foodType: 1 };       // Test Jerky is meat
+  d.items[3] = { ...d.items[3], foodType: 2 };       // Raw Testfish is fish
+  const hunter = () => {
+    const s = newGame(d, { name: 'Tester', race: 1, cls: 1, seed: 3, now: T0 });
+    s.char.cls = 3; s.char.level = 10; s.char.hp = playerStats(s, d).maxHp;
+    expect(applyCommand(s, d, { name: 'tame', creature: 100 }).ok).toBe(true);
+    return s;
+  };
+  it('a beast loses happiness as it fights and eats its diet from your bags', () => {
+    const fed = hunter(), hungry = hunter();
+    fed.inventory = { 5: 50, 3: 50 };
+    hungry.inventory = { 3: 50 }; // fish only: a boar won't eat it
+    for (const s of [fed, hungry]) { startAction(s, d, { kind: 'fight', creature: 100 }); advance(s, d, T0 + 2 * 3_600_000); }
+    expect(hungry.pet!.happiness!).toBeLessThan(UNHAPPY);
+    expect(hungry.inventory[3]).toBeGreaterThan(40); // (only eaten by the hunter, if at all)
+    expect(fed.pet!.happiness!).toBeGreaterThanOrEqual(UNHAPPY);
+    expect(fed.inventory[5] ?? 0).toBeLessThan(50);
+  });
+  it('an unhappy beast deals less damage; the Imp adds Stamina', () => {
+    const s = hunter();
+    s.pet!.happiness = 900;
+    const happy = petStats(s, d, s.pet!).dmgMax;
+    s.pet!.happiness = 100;
+    expect(petStats(s, d, s.pet!).dmgMax).toBeLessThan(happy);
+    const w = newGame(d, { name: 'Tester', race: 1, cls: 1, seed: 3, now: T0 });
+    w.char.cls = 9; w.char.level = 14;
+    expect(applyCommand(w, d, { name: 'demon', kind: 'imp' }).ok).toBe(true);
+    const sta = playerStats(w, d).sta;
+    w.char.cls = 1;
+    expect(sta - playerStats(w, d).sta).toBe(9);
   });
 });

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   canFish, canGather, equipSlots, factionOfRace, fishingCatchChance, gatherColor, killXp, MAX_PRIMARY,
-  activePet, EFFECT_NAMES, bagSpace, BANK_SLOTS, bankUsed, roomFor, DEMONS, HUNTER, knownDemons, petStats, rangedStats, TAME_LEVEL, tameError, WARLOCK, playerStats, PRIMARY_PROFESSIONS, rankTerms, REP_RANKS, PROFESSIONS, SKILL_NAME, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
+  activePet, HAPPY, UNHAPPY, petFood, EFFECT_NAMES, bagSpace, BANK_SLOTS, bankUsed, roomFor, DEMONS, HUNTER, knownDemons, petStats, rangedStats, TAME_LEVEL, tameError, WARLOCK, playerStats, PRIMARY_PROFESSIONS, rankTerms, REP_RANKS, PROFESSIONS, SKILL_NAME, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
 } from '@idle/sim';
 import { game } from './game.js';
 import { Diorama, type Activity } from './diorama.js';
@@ -63,7 +63,7 @@ export function CombatPage({ s, data }: P) {
                   {fighting === id
                     ? <button className="btn secondary" onClick={() => game.command({ name: 'stop' })}>Stop</button>
                     : <button className="btn" onClick={() => game.command({ name: 'start', action: { kind: 'fight', creature: id } })}>Fight</button>}
-                  {s.char.cls === HUNTER && !tameError(s, d) && s.pet?.creature !== id && (
+                  {s.char.cls === HUNTER && !tameError(s, d, data) && s.pet?.creature !== id && (
                     <button className="btn secondary small" title={s.pet ? `Replaces ${s.pet.name}` : 'It will fight at your side and hold the mob'}
                       onClick={() => game.command({ name: 'tame', creature: id })}>Tame</button>)}
                 </div>
@@ -76,6 +76,9 @@ export function CombatPage({ s, data }: P) {
   );
 }
 
+const DIET = ['meat', 'fish', 'cheese', 'bread', 'fungus', 'fruit'];
+const dietText = (mask: number) => DIET.filter((_, i) => mask & (1 << i)).join(', ') || 'nothing';
+
 /** Your pet: a hunter's tamed beast (tame one from the list below) or a warlock's demon (pick one). */
 function PetPanel({ s, data }: P) {
   if (s.char.cls !== HUNTER && s.char.cls !== WARLOCK) return null;
@@ -87,7 +90,9 @@ function PetPanel({ s, data }: P) {
       <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 200 }}>
           <div className="title">{pet ? pet.name : s.char.cls === HUNTER ? 'No pet' : 'No demon'}
-            {pet && <span className="tag" style={{ marginLeft: 6 }}>{pet.kind === 'beast' || petStats(s, data, pet).tank ? 'holds the mob' : 'damage'}</span>}</div>
+            {pet && <span className="tag" style={{ marginLeft: 6 }}>{pet.kind === 'beast' || petStats(s, data, pet).tank ? 'holds the mob' : 'damage'}</span>}
+            {pet?.kind === 'beast' && <span className={`tag ${(pet.happiness ?? 500) < UNHAPPY ? 'bad' : ''}`} style={{ marginLeft: 6 }}>{(pet.happiness ?? 500) > HAPPY ? 'Happy (+25% damage)' : (pet.happiness ?? 500) < UNHAPPY ? 'Unhappy (-25% damage)' : 'Content'}</span>}</div>
+          {pet?.kind === 'beast' && <div className="meta">{pet.family ? `A ${data.petFamilies?.[pet.family]?.name.toLowerCase() ?? 'beast'}: eats ${dietText(data.petFamilies?.[pet.family]?.diet ?? 0)}. ` : ''}{(() => { const f = petFood(s, data, pet); return f ? `Next meal: ${data.items[f]?.name} (${s.inventory[f]} in your bags).` : 'No food it eats in your bags: it gets unhappy as it fights.'; })()}</div>}
           <div className="meta">{s.char.cls === HUNTER
             ? (s.char.level < TAME_LEVEL ? `You learn Tame Beast at level ${TAME_LEVEL}.` : pet ? 'Your pet holds the mob while you shoot.' : 'Tame a beast of your level or lower from the list below.')
             : 'Your demon fights beside you. The Voidwalker holds the mob; the others deal damage.'}</div>
@@ -168,6 +173,7 @@ export function ActionScene({ s, data, hint }: P & { hint?: string }) {
         case 'kill': d.die('mob'); sound.play(data.creatures[e.creature]?.sounds?.death, 'voices'); if (e.gold) sound.play(snd?.ui.coins, 'effects', 0.6); break;
         case 'eat': sound.play(snd?.ui.eat); break;
         case 'petdeath': d.die('pet'); break;
+        case 'petfeed': float('pet', `+ ${data.items[e.item]?.name ?? 'food'}`, 'heal', 'pet'); sound.play(snd?.ui.eat, 'effects', 0.6); break;
         case 'death': d.die('player'); d.setActivity('dead'); break;
         case 'revive': d.revive(); d.revivePet(); break;
         case 'harvest':
