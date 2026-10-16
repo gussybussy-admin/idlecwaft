@@ -3,7 +3,7 @@ import {
   advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, planTravel, playerStats,
   rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, trainSpells, knownSpells,
   learnTalent, pointsSpent, modded, activeTalentEffects, resetTalents, resetCost,
-  disenchant, unlearnProfession, attunementError, POISON_INSTANT, UNHAPPY, petStats, itemCategory, bagSpace, roomFor, equipBag, giveItem, activePet, rangedStats, dungeonLoot, nextReset, withRaidBuffs, groupRoles, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
+  disenchant, unlearnProfession, canCraft, attunementError, POISON_INSTANT, UNHAPPY, petStats, itemCategory, bagSpace, roomFor, equipBag, giveItem, activePet, rangedStats, dungeonLoot, nextReset, withRaidBuffs, groupRoles, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
   type GameState, type SimEvent,
 } from '../src/index.js';
 import { fixture } from './fixture.js';
@@ -909,5 +909,24 @@ describe('boss phases and attunements', () => {
     expect(attunementError(s, d, raid)).toBe('Requires attunement: clear Test Hold once.');
     s.cleared = [1];
     expect(attunementError(s, d, raid)).toBeNull();
+  });
+});
+
+describe('profession specializations', () => {
+  it('a specialization needs skill, level and gold; its recipes need it; switching forgets the old ones', () => {
+    const d = fixture();
+    const s = newGame(d, { name: 'X', race: 1, cls: 1, seed: 3, now: T0 });
+    s.char.level = 40; s.gold = 1_000_000;
+    s.skills.blacksmithing = { level: 210, max: 225 };
+    const r = Object.values(d.recipes)[0];
+    d.recipes[r.spellId] = { ...r, skill: 'blacksmithing', spec: 9788 };
+    s.recipes.push(r.spellId);
+    expect(canCraft(s, d, r.spellId)).toBe('Requires Armorsmith.');
+    expect(applyCommand(s, d, { name: 'specialize', spec: 17039 })).toEqual({ ok: false, error: 'Requires 250 skill.' });
+    expect(applyCommand(s, d, { name: 'specialize', spec: 9788 }).ok).toBe(true);
+    expect(canCraft(s, d, r.spellId)).not.toBe('Requires Armorsmith.');
+    expect(applyCommand(s, d, { name: 'specialize', spec: 9787 }).ok).toBe(true);
+    expect(s.specs).toEqual([9787]);
+    expect(s.recipes).not.toContain(r.spellId);
   });
 });

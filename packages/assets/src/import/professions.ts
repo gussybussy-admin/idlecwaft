@@ -1,6 +1,9 @@
 // Profession data: rank spells, recipes for every crafting skill (from SkillLineAbility.dbc plus the
 // spell table), and the item enchantments those recipes apply (SpellItemEnchantment.dbc).
 import type { EnchantDef, Profession, RecipeDef, SkillRank } from '@idle/sim';
+import { SPECS } from '@idle/sim';
+/** Professions with specializations. */
+const SPEC_SKILLS = new Set(['blacksmithing', 'leatherworking', 'engineering']);
 import type { Client } from '../client.js';
 import type { VMangos } from './vmangos.js';
 
@@ -73,6 +76,7 @@ export function buildRecipes(client: Client, vm: VMangos, castTimes: Map<number,
       yellow, green: Math.floor((yellow + grey) / 2), grey,
       castMs: castTimes.get(Number(s.castingTimeIndex)) || 3000,
       source: trainer ? { trainer: trainer.cost } : { recipeItem: Number(recipeItem!.entry) },
+      ...(SPEC_SKILLS.has(skill) ? (() => { const sp = vm.specOf(spellId, SPECS.map(x => x.id)); return sp ? { spec: sp } : {}; })() : {}),
     });
   }
   const have = new Set(obtainable);

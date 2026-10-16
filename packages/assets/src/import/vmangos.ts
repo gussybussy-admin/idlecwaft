@@ -48,6 +48,24 @@ export class VMangos {
     return [spell, ...rows.map(r => Number(r.entry))];
   }
 
+  /**
+   * The specialization a recipe needs (its spell id), or 0: recipes only specialist trainers teach
+   * (creature_template.trainer_spell) or whose recipe item requires the specialization.
+   */
+  specOf(spell: number, specs: number[]): number {
+    const list = specs.join(',');
+    let general = false, spec = 0;
+    for (const s of this.teachSpells(spell)) {
+      for (const r of this.all(`SELECT ct.trainer_spell ts FROM npc_trainer t JOIN creature_template ct ON ct.entry = t.entry WHERE t.spell = ? AND t.build_min <= 5875 AND t.build_max >= 5875
+        UNION ALL SELECT ct.trainer_spell ts FROM npc_trainer_template t JOIN creature_template ct ON ct.trainer_id = t.entry WHERE t.spell = ? AND t.build_min <= 5875 AND t.build_max >= 5875`, s, s)) {
+        if (specs.includes(Number(r.ts))) spec = Number(r.ts); else general = true;
+      }
+      const item = this.get(`SELECT required_spell FROM item_template WHERE class = 9 AND (spellid_1 = ? OR spellid_2 = ?) AND required_spell IN (${list}) LIMIT 1`, s, s);
+      if (item) return Number(item.required_spell);
+    }
+    return general ? 0 : spec;
+  }
+
   /** Cheapest trainer offer for a spell (via any of its teach spells), if a trainer teaches it. */
   trainerOffer(spell: number): { cost: number; reqSkill: number; reqLevel: number } | null {
     let best: { cost: number; reqSkill: number; reqLevel: number } | null = null;

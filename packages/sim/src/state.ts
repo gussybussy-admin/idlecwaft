@@ -91,6 +91,8 @@ export interface GameState {
   rep: Record<number, number>;
   action: Action | null;
   phase: Phase;
+  /** Profession specializations (spell ids, see SPECS). */
+  specs?: number[];
   /** Dungeons and raids this character has cleared at least once (attunements). */
   cleared?: number[];
   /** Your own bank (item -> count). */

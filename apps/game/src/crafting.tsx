@@ -1,6 +1,7 @@
 // Production professions (one page for every crafting skill), disenchanting, and skinning.
 import { useState } from 'react';
 import {
+  hasSpecFor, specById, specError, SPECS,
   canCraft, disenchantReq, enchantSlot, gatherColor, recipeColor, SKILL_NAME, SKINNING_KNIFE, skinningReq,
   type GameData, type GameState, type Profession, type RecipeDef,
 } from '@idle/sim';
@@ -15,6 +16,29 @@ const productIcon = (r: RecipeDef, data: GameData, size?: 'sm' | 'lg') => r.item
   ? <ItemIcon id={r.item} data={data} size={size} />
   : <Icon name={SKILL_ICON.enchanting} size={size} title={data.enchants[r.enchant!.id]?.name} />;
 
+/** Specializations for this profession: pick one per choice (switching forgets the old one's recipes). */
+function SpecPanel({ s, data, skill }: P & { skill: Profession }) {
+  const specs = SPECS.filter(x => x.skill === skill);
+  if (!specs.length || !s.skills[skill]?.max) return null;
+  const count = (id: number) => Object.values(data.recipes).filter(r => r.spec === id).length;
+  return (
+    <div className="panel">
+      <div className="panel-head"><h3>Specialization</h3><span className="muted">Each unlocks its own recipes; switching forgets the other's.</span></div>
+      <div className="grid">{specs.map(sp => {
+        const mine = s.specs?.includes(sp.id), err = specError(s, sp);
+        return (
+          <div key={sp.id} className={`card ${mine ? 'current' : ''}`}>
+            <div className="title">{sp.name}</div>
+            <div className="meta">{count(sp.id)} recipes · skill {sp.reqSkill}, level {sp.reqLevel}{sp.requires ? ` · after ${specById(sp.requires)?.name}` : ''}</div>
+            <div className="btn-row">{mine ? <span className="tag">Yours</span>
+              : <button className="btn secondary small" disabled={!!err} title={err ?? ''} onClick={() => game.command({ name: 'specialize', spec: sp.id })}>Specialize (<Money copper={sp.cost} />)</button>}</div>
+          </div>
+        );
+      })}</div>
+    </div>
+  );
+}
+
 export function CraftPage({ s, data, skill, embedded }: P & { skill: Profession; embedded?: boolean }) {
   const sk = s.skills[skill];
   const [filter, setFilter] = useState<Filter>('known');
@@ -22,7 +46,7 @@ export function CraftPage({ s, data, skill, embedded }: P & { skill: Profession;
   const current = s.action?.kind === 'craft' ? s.action.recipe : null;
   const all = Object.values(data.recipes).filter(r => r.skill === skill).sort((a, b) => a.orange - b.orange || a.name.localeCompare(b.name));
   const known = (r: RecipeDef) => s.recipes.includes(r.spellId);
-  const learnable = (r: RecipeDef) => !known(r) && r.orange <= sk.level + 25
+  const learnable = (r: RecipeDef) => !known(r) && r.orange <= sk.level + 25 && hasSpecFor(s, r.spec)
     && ('trainer' in r.source || (s.inventory[r.source.recipeItem] ?? 0) > 0);
   const shown = all.filter(r => (filter === 'known' ? known(r) : filter === 'learn' ? learnable(r) : true)
     && (!q || r.name.toLowerCase().includes(q.toLowerCase())));
@@ -31,6 +55,7 @@ export function CraftPage({ s, data, skill, embedded }: P & { skill: Profession;
     <>
       {!embedded && <SkillHeader s={s} data={data} skill={skill} />}
       {!embedded && <ActionScene s={s} data={data} hint="Pick a recipe to make" />}
+      {!embedded && <SpecPanel s={s} data={data} skill={skill} />}
       <div className="panel">
         <div className="panel-head" style={{ flexWrap: 'wrap' }}>
           <h3>{embedded ? 'Smelting' : 'Recipes'}</h3>
@@ -74,6 +99,7 @@ function RecipeCard({ s, data, r, current, known }: P & { r: RecipeDef; current:
           <span key={i} className="row" style={{ gap: 4 }} {...withTip(() => <ItemTooltip item={data.items[i]} data={data} />)}><ItemIcon id={i} data={data} size="sm" />
             <span className={(s.inventory[i] ?? 0) >= n ? '' : 'c-red'} style={{ fontSize: 12 }}>{s.inventory[i] ?? 0}/{n}</span></span>))}
         {(r.tools ?? []).map(t => <span key={t} className={`tag ${(s.inventory[t] ?? 0) > 0 ? '' : 'c-red'}`}>{data.items[t]?.name ?? 'tool'}</span>)}
+        {r.spec && <span className={`tag ${hasSpecFor(s, r.spec) ? "" : "c-red"}`}>{specById(r.spec)?.name}</span>}
       </div>
       <div className="meta"><span className="c-orange">{r.orange}</span> · <span className="c-yellow">{r.yellow}</span> · <span className="c-green">{r.green}</span> · <span className="c-grey">{r.grey}</span></div>
       {current && <WorkBar s={s} />}

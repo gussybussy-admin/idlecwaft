@@ -1,6 +1,7 @@
 // Every player action as data. The server validates and applies these; nothing else changes a
 // character, so a command log plus the seeded RNG fully determines a character's history.
 import type { GameData } from './data.js';
+import { specialize } from './specs.js';
 import { BAG_SLOTS, bankDeposit, bankDepositAll, bankWithdraw, unequipBag } from './bags.js';
 import { log } from './state.js';
 import { DEMONS, HUNTER, knownDemons, tameError, WARLOCK, type PetKind } from './pets.js';
@@ -39,7 +40,8 @@ export type Command =
   /** Warlocks: which demon to summon. */
   | { name: 'demon'; kind: Exclude<PetKind, 'beast'> }
   | { name: 'dismissPet' }
-  | { name: 'unequipBag'; slot: number };
+  | { name: 'unequipBag'; slot: number }
+  | { name: 'specialize'; spec: number };
 
 const int = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 
@@ -79,6 +81,7 @@ export function parseCommand(raw: unknown): Command | null {
     case 'tame': return int(c.creature, 1, 1e7) ? { name: 'tame', creature: c.creature as number } : null;
     case 'demon': return typeof c.kind === 'string' && c.kind in DEMONS ? { name: 'demon', kind: c.kind as Exclude<PetKind, 'beast'> } : null;
     case 'dismissPet': return { name: 'dismissPet' };
+    case 'specialize': return int(c.spec, 1, 1e6) ? { name: 'specialize', spec: c.spec as number } : null;
     case 'unequipBag': return int(c.slot, 0, BAG_SLOTS - 1) ? { name: 'unequipBag', slot: c.slot as number } : null;
     case 'train': return PROFESSIONS.includes(c.skill as Profession) ? { name: 'train', skill: c.skill as Profession } : null;
     case 'learnRecipe': return int(c.recipe, 1, 1e7) ? { name: 'learnRecipe', recipe: c.recipe as number } : null;
@@ -140,6 +143,7 @@ export function applyCommand(s: GameState, data: GameData, c: Command): CommandR
       return { ok: true };
     }
     case 'unequipBag': return unequipBag(s, data, c.slot);
+    case 'specialize': return specialize(s, data, c.spec);
     case 'dismissPet':
       if (s.char.cls !== HUNTER || !s.pet) return { ok: false, error: 'No pet to release.' };
       log(s, 'info', `You release ${s.pet.name}.`);

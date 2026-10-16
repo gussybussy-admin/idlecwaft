@@ -15,5 +15,6 @@ export * from './group.js';
 export * from './pets.js';
 export * from './bags.js';
 export * from './classes.js';
+export * from './specs.js';
 export * from './commands.js';
 export * from './protocol.js';

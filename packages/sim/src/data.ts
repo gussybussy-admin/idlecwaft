@@ -137,6 +137,8 @@ export interface RecipeDef {
   source: { trainer: Copper } | { recipeItem: ItemId };
   /** The crafting sound (SoundEntries id). */
   sound?: number;
+  /** A specialization's recipe (the specialization's spell id, see SPECS). */
+  spec?: number;
 }
 
 export interface SkillRank { name: string; max: number; reqLevel: number; cost: Copper; spellId: number }

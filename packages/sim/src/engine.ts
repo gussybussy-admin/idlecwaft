@@ -2,6 +2,7 @@
 // one discrete event at a time, using only the RNG stored in the state: same state + same target
 // time = same result, which is what lets the server simulate and clients replay.
 import type { CreatureDef, GameData, ItemDef, RecipeDef, SkillRank } from './data.js';
+import { hasSpecFor, specById } from './specs.js';
 import { poisons, SEARING_MS, STREAM_MS, totems } from './classes.js';
 /** Spell ids shown for totem damage and healing (Searing Totem, Healing Stream). */
 const TOTEM_SEARING = 3599, TOTEM_STREAM = 5394;
@@ -746,6 +747,7 @@ export function canCraft(s: GameState, data: GameData, recipeId: number, slot?: 
   if (!r) return 'Unknown recipe.';
   if (!s.skills[r.skill]?.max) return `You need to train ${SKILL_NAME[r.skill]} first.`;
   if (!s.recipes.includes(recipeId)) return `You don't know ${r.name}.`;
+  if (!hasSpecFor(s, r.spec)) return `Requires ${specById(r.spec!)?.name}.`;
   for (const [i, n] of r.reagents) if (!hasItem(s, i, n)) return `Out of ${data.items[i]?.name ?? 'reagents'}.`;
   for (const tool of r.tools ?? []) if (!hasItem(s, tool) && !SLOTS.some(sl => s.equipment[sl] === tool)) return `Requires ${data.items[tool]?.name ?? 'a tool'}.`;
   if (r.enchant && !enchantSlot(s, data, r, slot)) return `Nothing equipped that ${r.name} can go on.`;
@@ -899,7 +901,7 @@ export function train(s: GameState, data: GameData, skill: Profession): CommandR
   if (!sk.level) sk.level = 1;
   if (skill === 'fishing' && firstRank) giveStarterPole(s, data);
   for (const r of Object.values(data.recipes)) {
-    if (r.skill === skill && 'trainer' in r.source && r.source.trainer === 0 && r.orange <= sk.level && !s.recipes.includes(r.spellId)) s.recipes.push(r.spellId);
+    if (r.skill === skill && 'trainer' in r.source && r.source.trainer === 0 && r.orange <= sk.level && !s.recipes.includes(r.spellId) && hasSpecFor(s, r.spec)) s.recipes.push(r.spellId);
   }
   log(s, 'skill', `You are now ${/^[AEIOU]/.test(next.name) ? 'an' : 'a'} ${next.name} in ${SKILL_NAME[skill]} (max ${next.max}).`);
   return ok;
@@ -909,6 +911,7 @@ export function learnRecipe(s: GameState, data: GameData, recipeId: number): Com
   const r = data.recipes[recipeId];
   if (!r) return fail('Unknown recipe.');
   if (s.recipes.includes(recipeId)) return fail('Already known.');
+  if (!hasSpecFor(s, data.recipes[recipeId]?.spec)) return fail(`Requires ${specById(data.recipes[recipeId]!.spec!)?.name}.`);
   const sk = s.skills[r.skill];
   if (!sk?.max) return fail(`Train ${SKILL_NAME[r.skill]} first.`);
   if (sk.level < r.orange) return fail(`Requires ${SKILL_NAME[r.skill]} ${r.orange}.`);
