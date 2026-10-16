@@ -78,10 +78,11 @@ VMaNGOS: the server sends the game's data, and the art is converted from their o
 
 ### The launcher (recommended)
 
-Friends download [`release/IdlecraftLauncher.exe`](release/IdlecraftLauncher.exe) from this repository
+The launcher isn't in the repository (68 MB per build would bloat it): build it with
+`npm run build:launcher` (it lands in `release/IdlecraftLauncher.exe`), and friends download it from your
+running server at `http://<your server>:7420/api/launcher/download`, or you send them the file
 (Windows, ~68 MB, no Node needed — it's built in). It contains only this project's code and the Node
-runtime: no WoW art or data. After code changes, rebuild it with `npm run build:launcher` (this also
-refreshes `release/`) and commit the new exe.
+runtime: no WoW art or data.
 
 A friend puts it in its own folder and double-clicks it:
 
@@ -97,7 +98,7 @@ Windows SmartScreen will say "unknown publisher" (the exe isn't code-signed): **
 **Updates are automatic.** The guild server offers the launcher in `release/` to everyone who connects:
 on start, a launcher whose build differs downloads the new one from your server, checks its SHA-256,
 swaps itself and restarts in the same window. So after you pull a new version, run
-`npm run build:launcher` (if the exe in the pull isn't already current) and restart the server, and
+`npm run build:launcher` and restart the server, and
 friends get it the next time they open the launcher. `--no-update` skips the check.
 
 ### From source (any OS)

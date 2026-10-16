@@ -4,7 +4,7 @@ import { game } from './game.js';
 import { GuildPage } from './guild.js';
 import { TravelPage } from './travel.js';
 import { PowerBar, SpellbookPage, TalentsPage } from './spells.js';
-import { BagsPanel, CharacterPage, CombatPage, FishingPage, GatherPage, LogPage, SKILL_ICON, TownPage } from './pages.js';
+import { BagsPanel, BankPanel, CharacterPage, CombatPage, FishingPage, GatherPage, LogPage, SKILL_ICON, TownPage } from './pages.js';
 import { CraftPage, SkinningPage } from './crafting.js';
 import { QuestsPage, ReputationPage } from './quests.js';
 import { DungeonsPage } from './dungeons.js';
@@ -83,7 +83,7 @@ export function App() {
         {page === 'skinning' && <SkinningPage s={s} data={data} />}
         {CRAFTING.includes(page as Profession) && <CraftPage key={page} s={s} data={data} skill={page as Profession} />}
         {page === 'character' && <CharacterPage s={s} data={data} />}
-        {page === 'bags' && <BagsPanel s={s} data={data} />}
+        {page === 'bags' && <><BagsPanel s={s} data={data} /><BankPanel s={s} data={data} /></>}
         {page === 'town' && <TownPage s={s} data={data} />}
         {page === 'log' && <LogPage s={s} data={data} />}
         {page === 'travel' && <TravelPage s={s} data={data} />}

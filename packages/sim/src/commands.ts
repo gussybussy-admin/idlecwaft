@@ -1,7 +1,7 @@
 // Every player action as data. The server validates and applies these; nothing else changes a
 // character, so a command log plus the seeded RNG fully determines a character's history.
 import type { GameData } from './data.js';
-import { BAG_SLOTS, unequipBag } from './bags.js';
+import { BAG_SLOTS, bankDeposit, bankDepositAll, bankWithdraw, unequipBag } from './bags.js';
 import { log } from './state.js';
 import { DEMONS, HUNTER, knownDemons, tameError, WARLOCK, type PetKind } from './pets.js';
 import type { Action, GameState, Profession, Slot } from './state.js';
@@ -22,7 +22,9 @@ export type Command =
   | { name: 'sellJunk' }
   | { name: 'equip'; item: number }
   | { name: 'unequip'; slot: Slot }
-  | { name: 'settings'; autoEat?: boolean; eatBelowPct?: number; restBelowPct?: number; autoSkin?: boolean; potionBelowPct?: number }
+  | { name: 'settings'; autoEat?: boolean; eatBelowPct?: number; restBelowPct?: number; autoSkin?: boolean; potionBelowPct?: number; autoDeposit?: boolean }
+  | { name: 'bankDeposit' | 'bankWithdraw'; item: number; count: number }
+  | { name: 'bankDepositAll' }
   | { name: 'trainRiding' }
   | { name: 'trainSpells' }
   | { name: 'learnTalent'; talent: number }
@@ -71,6 +73,9 @@ export function parseCommand(raw: unknown): Command | null {
       if (!int(c.quest, 1, 1e7)) return null;
       return int(c.choice, 1, 1e7) ? { name: 'turnInQuest', quest: c.quest as number, choice: c.choice as number } : { name: 'turnInQuest', quest: c.quest as number };
     }
+    case 'bankDeposit': case 'bankWithdraw':
+      return int(c.item, 1, 1e7) && int(c.count, 1, 1e7) ? { name: c.name, item: c.item as number, count: c.count as number } : null;
+    case 'bankDepositAll': return { name: 'bankDepositAll' };
     case 'tame': return int(c.creature, 1, 1e7) ? { name: 'tame', creature: c.creature as number } : null;
     case 'demon': return typeof c.kind === 'string' && c.kind in DEMONS ? { name: 'demon', kind: c.kind as Exclude<PetKind, 'beast'> } : null;
     case 'dismissPet': return { name: 'dismissPet' };
@@ -88,6 +93,7 @@ export function parseCommand(raw: unknown): Command | null {
       if (int(c.restBelowPct, 10, 99)) out.restBelowPct = c.restBelowPct as number;
       if (typeof c.autoSkin === 'boolean') out.autoSkin = c.autoSkin;
       if (int(c.potionBelowPct, 5, 90)) out.potionBelowPct = c.potionBelowPct as number;
+      if (typeof c.autoDeposit === 'boolean') out.autoDeposit = c.autoDeposit;
       return out;
     }
     default: return null;
@@ -145,6 +151,10 @@ export function applyCommand(s: GameState, data: GameData, c: Command): CommandR
       if (c.restBelowPct !== undefined) s.settings.restBelowPct = c.restBelowPct;
       if (c.autoSkin !== undefined) s.settings.autoSkin = c.autoSkin;
       if (c.potionBelowPct !== undefined) s.settings.potionBelowPct = c.potionBelowPct;
+      if (c.autoDeposit !== undefined) s.settings.autoDeposit = c.autoDeposit;
       return { ok: true };
+    case 'bankDeposit': return bankDeposit(s, data, c.item, c.count);
+    case 'bankWithdraw': return bankWithdraw(s, data, c.item, c.count);
+    case 'bankDepositAll': return bankDepositAll(s, data);
   }
 }

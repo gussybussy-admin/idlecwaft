@@ -86,7 +86,8 @@ export function createServer({ db, world, gameDataJson, clock = Date.now, launch
     if (req.method === 'GET' && url.pathname === '/api/launcher/download') {
       const l = launcher();
       if (!l) return json(404, { ok: false, error: 'No launcher build on this server.' });
-      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': l.size, 'x-sha256': l.sha256 });
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': l.size, 'x-sha256': l.sha256,
+        'content-disposition': 'attachment; filename="IdlecraftLauncher.exe"' });
       fs.createReadStream(launcherFile!).pipe(res);
       return;
     }

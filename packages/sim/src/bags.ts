@@ -7,6 +7,8 @@ import type { GameState } from './state.js';
 
 export const BACKPACK_SLOTS = 16;
 export const BAG_SLOTS = 4;
+/** Your own bank: open anywhere (an idle game has no walk to the city), this many stacks. */
+export const BANK_SLOTS = 200;
 
 export interface BagSpace {
   /** Slots in the backpack and general bags, and how many are used. */
@@ -54,13 +56,61 @@ export function roomFor(s: GameState, data: GameData, item: number, space = bagS
 }
 
 /**
- * Puts up to `n` of `item` in your bags; returns how many fit (the rest is lost: left on the corpse,
- * the node or the floor).
+ * Puts up to `n` of `item` in your bags; with auto-deposit on, what doesn't fit goes to your bank.
+ * Returns how many you kept (the rest is lost: left on the corpse, the node or the floor).
  */
 export function giveItem(s: GameState, data: GameData, item: number, n: number): number {
   const fit = Math.min(n, roomFor(s, data, item));
   if (fit > 0) s.inventory[item] = (s.inventory[item] ?? 0) + fit;
+  if (fit < n && s.settings.autoDeposit) {
+    const banked = Math.min(n - fit, bankRoomFor(s, data, item));
+    if (banked > 0) { (s.bank ??= {})[item] = (s.bank[item] ?? 0) + banked; return fit + banked; }
+  }
   return fit;
+}
+
+/** Stacks in your bank. */
+export function bankUsed(s: GameState, data: GameData): number {
+  return Object.entries(s.bank ?? {}).reduce((a, [id, n]) => a + stacks(data.items[+id], n), 0);
+}
+
+/** How many of `item` your bank can still take. */
+export function bankRoomFor(s: GameState, data: GameData, item: number): number {
+  const stack = Math.max(1, data.items[item]?.stack ?? 1);
+  const have = s.bank?.[item] ?? 0;
+  const topUp = have % stack ? stack - (have % stack) : 0;
+  return topUp + Math.max(0, BANK_SLOTS - bankUsed(s, data)) * stack;
+}
+
+type Result = { ok: true } | { ok: false; error: string };
+
+export function bankDeposit(s: GameState, data: GameData, item: number, count: number): Result {
+  if ((s.inventory[item] ?? 0) < count) return { ok: false, error: "You don't have that many." };
+  if (bankRoomFor(s, data, item) < count) return { ok: false, error: 'Your bank is full.' };
+  s.inventory[item] -= count;
+  if (!s.inventory[item]) delete s.inventory[item];
+  (s.bank ??= {})[item] = (s.bank[item] ?? 0) + count;
+  return { ok: true };
+}
+
+export function bankWithdraw(s: GameState, data: GameData, item: number, count: number): Result {
+  if ((s.bank?.[item] ?? 0) < count) return { ok: false, error: "Your bank doesn't have that many." };
+  if (roomFor(s, data, item) < count) return { ok: false, error: 'Your bags are full.' };
+  s.bank![item] -= count;
+  if (!s.bank![item]) delete s.bank![item];
+  s.inventory[item] = (s.inventory[item] ?? 0) + count;
+  return { ok: true };
+}
+
+/** Banks everything that isn't a tool, food, a potion, ammo or a bag (what you use while idling stays). */
+export function bankDepositAll(s: GameState, data: GameData): Result {
+  for (const [id, n] of Object.entries(s.inventory)) {
+    const it = data.items[+id];
+    if (!it || it.tool || it.food || it.potion || it.elixir || it.protection || it.class === 6 || it.bagSlots) continue;
+    const put = Math.min(n, bankRoomFor(s, data, +id));
+    if (put > 0) bankDeposit(s, data, +id, put);
+  }
+  return { ok: true };
 }
 
 /** Gives a list of drops; returns what fitted (and what didn't). */

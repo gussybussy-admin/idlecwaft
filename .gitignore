@@ -41,3 +41,6 @@ server.config.json
 # launcher swaps (self-update and rebuilds while running)
 *.exe.old
 *.exe.download
+
+# The launcher build: friends get it from the guild server (/api/launcher), not from git.
+release/IdlecraftLauncher.exe

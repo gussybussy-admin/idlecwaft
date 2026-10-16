@@ -78,5 +78,5 @@ if (process.platform === 'win32') {
     fs.renameSync(committed, `${committed}.old`);
     fs.copyFileSync(exe, committed);
   }
-  console.log(`copied to ${path.relative(root, committed)} — the guild server offers it to launchers right away; commit it for GitHub`);
+  console.log(`copied to ${path.relative(root, committed)} — the guild server offers it to launchers right away (it is not committed)`);
 }

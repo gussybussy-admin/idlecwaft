@@ -3,7 +3,7 @@ import {
   advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, planTravel, playerStats,
   rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, trainSpells, knownSpells,
   learnTalent, pointsSpent, modded, activeTalentEffects, resetTalents, resetCost,
-  disenchant, unlearnProfession, itemCategory, bagSpace, roomFor, equipBag, activePet, rangedStats, dungeonLoot, nextReset, withRaidBuffs, groupRoles, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
+  disenchant, unlearnProfession, itemCategory, bagSpace, roomFor, equipBag, giveItem, activePet, rangedStats, dungeonLoot, nextReset, withRaidBuffs, groupRoles, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
   type GameState, type SimEvent,
 } from '../src/index.js';
 import { fixture } from './fixture.js';
@@ -555,6 +555,7 @@ describe('professions and commands', () => {
     s.gold = 100;
     train(s, data, 'fishing');
     buy(s, data, 11);
+    s.settings.autoDeposit = false;
     expect(startAction(s, data, { kind: 'fish' }).ok).toBe(true);
     const events: SimEvent[] = [];
     advance(s, data, T0 + 3_600_000, e => events.push(e));
@@ -768,6 +769,24 @@ describe('bags', () => {
     s.inventory[2000] = 1; d.items[2000] = { ...d.items[23], id: 2000 }; s.inventory[2001] = 1; d.items[2001] = { ...d.items[23], id: 2001 };
     s.inventory[2002] = 1; d.items[2002] = { ...d.items[23], id: 2002 };
     expect(applyCommand(s, d, { name: 'unequipBag', slot: 0 }).ok).toBe(false); // 23 stacks wouldn't fit in 16
+  });
+  it('a personal bank takes deposits, and catches what the bags cannot hold when auto-deposit is on', () => {
+    const s = newGame(d, { name: 'Tester', race: 1, cls: 1, seed: 1, now: T0 });
+    s.inventory = { 3: 50 };
+    expect(applyCommand(s, d, { name: 'bankDeposit', item: 3, count: 30 }).ok).toBe(true);
+    expect(s.inventory[3]).toBe(20);
+    expect(s.bank![3]).toBe(30);
+    expect(applyCommand(s, d, { name: 'bankWithdraw', item: 3, count: 31 }).ok).toBe(false);
+    expect(applyCommand(s, d, { name: 'bankWithdraw', item: 3, count: 10 }).ok).toBe(true);
+    fill(s, 16);
+    delete s.inventory[3];
+    s.settings.autoDeposit = true;
+    expect(giveItem(s, d, 1, 7)).toBe(7);
+    expect(s.bank![1]).toBe(7);
+    s.settings.autoDeposit = false;
+    expect(giveItem(s, d, 1, 7)).toBe(0);
+    expect(applyCommand(s, d, { name: 'bankDepositAll' }).ok).toBe(true);
+    expect(Object.keys(s.inventory)).toHaveLength(0);
   });
   it('characters from before bag limits get four bags', () => {
     const s = newGame(d, { name: 'Tester', race: 1, cls: 1, seed: 1, now: T0 });

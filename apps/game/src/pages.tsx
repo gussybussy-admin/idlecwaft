@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   canFish, canGather, equipSlots, factionOfRace, fishingCatchChance, gatherColor, killXp, MAX_PRIMARY,
-  activePet, bagSpace, DEMONS, HUNTER, knownDemons, petStats, rangedStats, TAME_LEVEL, tameError, WARLOCK, playerStats, PRIMARY_PROFESSIONS, rankTerms, REP_RANKS, PROFESSIONS, SKILL_NAME, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
+  activePet, bagSpace, BANK_SLOTS, bankUsed, roomFor, DEMONS, HUNTER, knownDemons, petStats, rangedStats, TAME_LEVEL, tameError, WARLOCK, playerStats, PRIMARY_PROFESSIONS, rankTerms, REP_RANKS, PROFESSIONS, SKILL_NAME, SLOTS, type GameData, type GameState, type Profession, type SimEvent, type Slot,
 } from '@idle/sim';
 import { game } from './game.js';
 import { Diorama, type Activity } from './diorama.js';
@@ -454,7 +454,7 @@ export function BagsPanel({ s, data }: P) {
           <div key={i} className="slot" title="Take off" onClick={() => game.command({ name: 'unequipBag', slot: i })}
             {...withTip(() => <><ItemTooltip item={data.items[id]} data={data} /><div className="t-muted">{data.items[id]?.bagSlots} slots · click to take off</div></>)}><ItemIcon id={id} data={data} /></div>
         ) : <div key={i} className="slot empty" title="Empty bag slot: equip a bag from your bags" />;
-      })}{space.used >= space.total && <span className="bad" style={{ fontSize: 12 }}>Your bags are full: loot is left behind and gathering stops.</span>}</div>
+      })}{space.used >= space.total && <span className="bad" style={{ fontSize: 12 }}>{s.settings.autoDeposit ? 'Your bags are full: new loot goes to your bank.' : 'Your bags are full: loot is left behind and gathering stops.'}</span>}</div>
       {items.length > 0 && bar}
       {groups.map(([cat, ids]) => (
         <div key={cat}>
@@ -474,6 +474,7 @@ export function BagsPanel({ s, data }: P) {
             {(equipSlots(it).length > 0 || !!it.bagSlots) && <button className="btn" onClick={() => { game.command({ name: 'equip', item: it.id }); setSel(null); }}>{it.bagSlots ? `Equip bag (${it.bagSlots} slots)` : 'Equip'}</button>}
             {it.sellPrice > 0 && <button className="btn secondary" onClick={() => game.command({ name: 'sell', item: it.id, count: 1 })}>Sell 1 (<Money copper={it.sellPrice} />)</button>}
             {it.sellPrice > 0 && count > 1 && <button className="btn secondary" onClick={() => { game.command({ name: 'sell', item: it.id, count: count }); setSel(null); }}>Sell all (<Money copper={it.sellPrice * count} />)</button>}
+            <button className="btn secondary" onClick={() => { game.command({ name: 'bankDeposit', item: it.id, count }); setSel(null); }}>Put in bank</button>
           </div>
         </div>
       )}
@@ -535,6 +536,46 @@ export function TownPage({ s, data }: P) {
         ))}
       </div>
     </>
+  );
+}
+
+/** Your own bank: 200 stacks, open anywhere; with auto-deposit on, what your bags can't hold goes here. */
+export function BankPanel({ s, data }: P) {
+  const [sel, setSel] = useState<number | null>(null);
+  const items = Object.entries(s.bank ?? {}).map(([id, n]) => [Number(id), n] as [number, number]).filter(([id]) => data.items[id])
+    .sort((a, b) => data.items[b[0]].quality - data.items[a[0]].quality || data.items[a[0]].name.localeCompare(data.items[b[0]].name));
+  const { bar, groups } = useItemFilter(data, items.map(([id]) => id));
+  const used = bankUsed(s, data);
+  const it = sel !== null ? data.items[sel] : null;
+  const count = sel !== null ? s.bank?.[sel] ?? 0 : 0;
+  const room = it ? Math.min(count, roomFor(s, data, it.id)) : 0;
+  return (
+    <div className="panel">
+      <div className="panel-head"><h3>Bank</h3><span className={used >= BANK_SLOTS ? 'bad' : 'muted'}>{used}/{BANK_SLOTS} slots</span><span className="spacer" />
+        <label className="muted" style={{ fontSize: 12 }}><input type="checkbox" checked={!!s.settings.autoDeposit}
+          onChange={e => game.command({ name: 'settings', autoDeposit: e.target.checked })} /> Auto-deposit when bags are full</label>
+        <button className="btn secondary small" onClick={() => game.command({ name: 'bankDepositAll' })} title="Keeps tools, food, potions, ammo and bags">Deposit materials</button></div>
+      {items.length > 0 && bar}
+      {groups.map(([cat, ids]) => (
+        <div key={cat}>
+          <div className="cat-head">{cat}</div>
+          <div className="bag">{ids.map(id => (
+            <div key={id} className={`slot ${sel === id ? 'sel' : ''}`} onClick={() => setSel(sel === id ? null : id)}>
+              <ItemIcon id={id} data={data} count={s.bank?.[id]} /></div>))}</div>
+        </div>
+      ))}
+      {!items.length && <span className="muted">Your bank is empty. Materials go here automatically when your bags are full.</span>}
+      {it && count > 0 && (
+        <div className="card" style={{ marginTop: 12, maxWidth: 520 }}>
+          <div className="row"><ItemIcon id={it.id} data={data} size="lg" /><div><div className={`title q${it.quality}`}>{it.name}</div><div className="meta">{count} in the bank</div></div></div>
+          <div className="btn-row">
+            <button className="btn" disabled={!room} onClick={() => game.command({ name: 'bankWithdraw', item: it.id, count: 1 })}>Take 1</button>
+            <button className="btn secondary" disabled={!room} onClick={() => { game.command({ name: 'bankWithdraw', item: it.id, count: room }); if (room === count) setSel(null); }}>
+              {room < count ? `Take ${room} (bags full)` : 'Take all'}</button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

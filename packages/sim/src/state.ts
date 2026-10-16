@@ -91,11 +91,13 @@ export interface GameState {
   rep: Record<number, number>;
   action: Action | null;
   phase: Phase;
+  /** Your own bank (item -> count). */
+  bank?: Record<number, number>;
   /** The four bag slots (container item ids). */
   bags?: (number | null)[];
   /** A hunter's tamed beast or a warlock's chosen demon. */
   pet?: Pet;
-  settings: { autoEat: boolean; eatBelowPct: number; restBelowPct: number; autoSkin: boolean; potionBelowPct: number };
+  settings: { autoEat: boolean; eatBelowPct: number; restBelowPct: number; autoSkin: boolean; potionBelowPct: number; autoDeposit?: boolean };
   stats: { kills: Record<number, number>; deaths: number; gathered: number; caught: number; cooked: number; crafted: number; skinned: number };
   log: LogEntry[];
 }
@@ -120,7 +122,8 @@ export function newGame(data: GameData, c: NewCharacter): GameState {
     quests: {}, questsDone: [], rep: {},
     action: null, phase: { p: 'idle' },
     bags: [null, null, null, null],
-    settings: { autoEat: true, eatBelowPct: 50, restBelowPct: 60, autoSkin: true, potionBelowPct: 35 },
+    bank: {},
+    settings: { autoEat: true, eatBelowPct: 50, restBelowPct: 60, autoSkin: true, potionBelowPct: 35, autoDeposit: true },
     stats: { kills: {}, deaths: 0, gathered: 0, caught: 0, cooked: 0, crafted: 0, skinned: 0 },
     log: [],
   };
@@ -151,7 +154,8 @@ export function migrateState(s: GameState, data?: GameData): GameState {
   s.skills = { ...noSkills(), ...s.skills };
   s.enchants ??= {};
   s.quests ??= {}; s.questsDone ??= []; s.rep ??= {};
-  s.settings.autoSkin ??= true; s.settings.potionBelowPct ??= 35;
+  s.settings.autoSkin ??= true; s.settings.potionBelowPct ??= 35; s.settings.autoDeposit ??= true;
+  s.bank ??= {};
   s.stats.crafted ??= 0; s.stats.skinned ??= 0;
   const a = s.action as unknown as { kind: string; recipe?: number } | null;
   if (a?.kind === 'cook') s.action = { kind: 'craft', recipe: a.recipe! }; // pre-4c saves

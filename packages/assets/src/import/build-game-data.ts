@@ -17,6 +17,9 @@ import { buildFactions, buildQuests, killReputation } from './quests.js';
 import { buildDungeons } from './dungeons.js';
 import { attachSounds } from './sounds.js';
 
+/** How far raw materials stack. */
+const RAW_STACK = 200;
+
 const LOCKTYPE_HERBALISM = 2, LOCKTYPE_MINING = 3, LOCK_KEY_SKILL = 2;
 const GO_TYPE_CHEST = 3;
 const NPC_FLAG_VENDOR = 0x4;
@@ -270,6 +273,23 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
   for (const id of items) {
     const t = vm.cachedItem(id);
     if (t) itemDefs[id] = itemDef(t, icons, vm, durations);
+  }
+  // Raw materials stack to RAW_STACK (an idle game gathers for hours): everything gathered, fished or
+  // skinned that stacks, and stackable trade goods (cloth, meat, herbs, ore, leather, ...).
+  const raw = new Set<number>();
+  const rawWalk = (ref: string | null | undefined, seen = new Set<string>()) => {
+    const t = ref ? vm.tables[ref] : undefined;
+    if (!t || seen.has(ref!)) return;
+    seen.add(ref!);
+    for (const e of [...t.entries, ...t.groups.flat()]) { if ('item' in e) raw.add(e.item); else rawWalk(e.ref, seen); }
+  };
+  for (const nd of Object.values(nodes)) rawWalk(nd.loot);
+  for (const z of zones) rawWalk(z.fishing?.loot);
+  for (const c of Object.values(creatures)) rawWalk(c.skin);
+  for (const it of Object.values(itemDefs)) {
+    // (Not potions or other consumables that also turn up in fishing pools, except the raw fish themselves.)
+    const material = it.class === 7 || (raw.has(it.id) && it.class === 0 && /^Raw /.test(it.name));
+    if (it.stack > 1 && it.quality <= 2 && material) it.stack = Math.max(it.stack, RAW_STACK);
   }
 
   // ---- player tables
