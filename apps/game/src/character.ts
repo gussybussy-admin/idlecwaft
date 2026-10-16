@@ -5,7 +5,7 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 
 export interface Look { race: number; sex: number; skin: number; face: number; hairStyle: number; hairColor: number; facialHair: number }
 /** An equipped item to show: its ItemDisplayInfo id and inventory type (which decides where it goes). */
-export interface GearPiece { displayId: number; invType: number; slot: string }
+export interface GearPiece { displayId: number; invType: number; slot: string; glow?: { color: number; size: number } }
 export interface HumanoidSpec extends Look { bake: string | null; geosets: Record<number, number>; gear?: GearPiece[] }
 
 /** items/<display>.json from the converter (packages/assets/src/convert/items.ts). */
@@ -104,6 +104,7 @@ export async function buildCharacter(spec: HumanoidSpec): Promise<BuiltCharacter
       if (g3) geosets[13] = 1301 + g3;                                   // robe skirt
     } else if (invType === 7) { geosets[9] = 901 + g1; if (g3) geosets[13] = 1301 + g3; }
     else if (invType === 19) geosets[12] = 1202;                         // tabard
+    else if (invType === 6 && g1) geosets[18] = 1801 + g1;                // belt buckle
     else if (invType === 16 && art.cape) { geosets[15] = 1502 + g1; cape = art.cape; }
     else if (invType === 1 && art.helmHide[spec.sex]) helmed = true;
   }
@@ -190,27 +191,67 @@ export async function buildCharacter(spec: HumanoidSpec): Promise<BuiltCharacter
 
   // ---- attached models: helmet, shoulders, weapons, shield (character attachment points)
   const raceSex = `${RACE_CODES[spec.race] ?? 'Hu'}${spec.sex === 0 ? 'M' : 'F'}`;
-  const attach = async (url: string, point: number) => {
+  const attach = async (url: string, point: number, glow?: GearPiece['glow']) => {
     const node = root.getObjectByName(`attach${point}`);
     const g = node ? await loadGLTF(url).catch(() => null) : null;
     if (!node || !g) return;
     const model = cloneSkinned(g.scene);
+    if (glow) addGlow(model, glow);
     // The item's own root turns WoW Z-up into Y-up; the attachment point is already in WoW space.
     model.getObjectByName('root')?.quaternion.identity();
     model.traverse(o => { const m = o as THREE.Mesh; if (m.isMesh) { m.castShadow = true; m.frustumCulled = false; } });
     node.add(model);
   };
-  await Promise.all(gear.flatMap(({ displayId, invType, slot, art }) => {
+  await Promise.all(gear.flatMap(({ displayId, invType, slot, art, glow }) => {
     if (!art) return [];
     const url = (side: 'left' | 'right', perRace = false) => `items/${displayId}-${side}${perRace ? `-${raceSex}` : ''}.glb`;
     if (invType === 1 && art.left) return [attach(url('left', true), 11)];
     if (invType === 3) return [art.left && attach(url('left'), 6), art.right && attach(url('right'), 5)].filter(Boolean) as Promise<void>[];
     if (invType === 14 && art.left) return [attach(url('left'), 0)];                    // shield
-    if (art.left && slot === 'mainhand') return [attach(url('left'), 1)];                // right hand
-    if (art.left && slot === 'offhand') return [attach(url('left'), 2)];                 // left hand
+    if (art.left && slot === 'mainhand') return [attach(url('left'), 1, glow)];          // right hand
+    if (art.left && slot === 'offhand') return [attach(url('left'), 2, glow)];           // left hand
     return [];
   }));
 
   const defs = (gltf.parser.json.animations ?? []) as { extras?: { durationS?: number } }[];
   return { root, animations: gltf.animations, durations: defs.map(d => d.extras?.durationS) };
+}
+
+// ---- enchantment glow: a soft additive halo along the weapon and a small light in its colour
+let glowTexture: THREE.Texture | null = null;
+function glowSprite(): THREE.Texture {
+  if (glowTexture) return glowTexture;
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d')!;
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.35, 'rgba(255,255,255,0.45)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  glowTexture = new THREE.CanvasTexture(c);
+  return glowTexture;
+}
+function addGlow(model: THREE.Object3D, glow: { color: number; size: number }): void {
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
+  const long = Math.max(size.x, size.y, size.z) || 1;
+  const axis = size.x === long ? 'x' : size.y === long ? 'y' : 'z';
+  const mat = new THREE.SpriteMaterial({ map: glowSprite(), color: glow.color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
+    opacity: 0.35 + glow.size * 0.15 });
+  // A few halos spaced along the blade, the biggest in the middle.
+  const n = 4;
+  for (let i = 0; i < n; i++) {
+    const sp = new THREE.Sprite(mat);
+    const p = center.clone();
+    p[axis] = box.min[axis] + (long * (i + 0.5)) / n;
+    sp.position.copy(model.worldToLocal(p.clone()));
+    const k = (0.18 + glow.size * 0.06) * long * (1 - Math.abs(i - (n - 1) / 2) / n);
+    sp.scale.set(k, k, k);
+    model.add(sp);
+  }
+  const light = new THREE.PointLight(glow.color, 0.6 + glow.size * 0.3, 2.5);
+  light.position.copy(model.worldToLocal(center.clone()));
+  model.add(light);
 }

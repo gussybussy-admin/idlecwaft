@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { buildCharacter, type GearPiece, type Look } from './character.js';
-import { buildClearing, displayEntry, loadGLTF } from './diorama.js';
+import { buildClearing, displayEntry, loadGLTF , npcGear } from './diorama.js';
 
 interface Actor { root: THREE.Object3D; mixer: THREE.AnimationMixer; clips: Map<string, THREE.AnimationClip>; base: string; current?: THREE.AnimationAction; dead?: boolean }
 export interface PartyMember { look: Look | null; gear: GearPiece[] }
@@ -69,7 +69,7 @@ export class GroupDiorama {
   }
 
   /** The mobs of a pull, by uid, with their creature display ids. */
-  async setMobs(mobs: { uid: number; displayIds: number[] }[]) {
+  async setMobs(mobs: { uid: number; displayIds: number[]; equip?: [number, number][] }[]) {
     const token = ++this.token;
     for (const a of this.mobs.values()) this.scene.remove(a.root);
     this.mobs.clear();
@@ -79,7 +79,7 @@ export class GroupDiorama {
         const entry = await displayEntry(id);
         if (!entry) continue;
         if (entry.humanoid) {
-          const built = await buildCharacter(entry.humanoid);
+          const built = await buildCharacter({ ...entry.humanoid, gear: npcGear(m.equip) });
           if (built) actor = this.actor(built.root, built.animations, built.durations, entry.scale || 1);
         } else {
           const g = await loadGLTF(`creatures/${id}.glb`);

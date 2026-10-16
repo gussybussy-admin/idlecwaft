@@ -364,6 +364,22 @@ export function buildGameData(client: Client, opts: BuildOptions): GameData {
     levelStats, classStats: classStatsOut, skillRanks,
     zones, creatures, items: itemDefs, nodes, recipes, enchants, quests, factions, dungeons, loot, taxiNodes, taxiPaths,
   };
+  // Weapon enchantment glows: SpellItemEnchantment 22 -> ItemVisuals 1-5 -> ItemVisualEffects 1 (model path),
+  // whose name says the colour and strength (RedGlow_Low, BlueGlow_High, WhiteGlow_Low for Crusader, ...).
+  {
+    const sie = client.dbc('SpellItemEnchantment'), iv = client.dbc('ItemVisuals'), ive = client.dbc('ItemVisualEffects');
+    const eff = new Map(ive.rows().map(r => [ive.u32(r, 0), ive.str(r, 1)]));
+    const vis = new Map(iv.rows().map(r => [iv.u32(r, 0), [1, 2, 3, 4, 5].map(f => eff.get(iv.u32(r, f)) ?? '').find(Boolean) ?? '']));
+    const COLORS: [RegExp, number][] = [[/RedFlame|Fire/i, 0xff6a1a], [/Red/i, 0xff3030], [/Blue|Frost|Ice/i, 0x4aa8ff], [/Yellow|Gold/i, 0xffd83a],
+      [/Purple|Arcane/i, 0xb04aff], [/Green|Poison|Nature/i, 0x5aff5a], [/White|Holy/i, 0xffffff], [/Skull|Shadow|Unholy/i, 0x8a3aff], [/Rock/i, 0xc8902a]];
+    for (const r of sie.rows()) {
+      const def = data.enchants[sie.u32(r, 0)];
+      const model = vis.get(sie.u32(r, 22));
+      if (!def || !model) continue;
+      const color = COLORS.find(([re]) => re.test(model))?.[1];
+      if (color !== undefined) def.glow = { color, size: /High/i.test(model) ? 3 : /Med/i.test(model) ? 2 : 1 };
+    }
+  }
   // Hunter pet families and their diets (CreatureFamily.dbc: 0 id, 7 pet food mask, 8 name).
   const cf = client.dbc('CreatureFamily');
   data.petFamilies = Object.fromEntries(cf.rows().filter(r => cf.u32(r, 7)).map(r => [cf.u32(r, 0), { name: cf.str(r, 8), diet: cf.u32(r, 7) }]));
@@ -392,6 +408,19 @@ function addVendor(zone: ZoneDef, t: Row, vm: VMangos, items: Set<number>, seen:
   }
 }
 
+/** The weapons and shield a creature holds (creature_equip_template), as [display id, inventory type]. */
+function npcEquip(vm: VMangos, t: Row): [number, number][] {
+  if (!Number(t.equipment_id)) return [];
+  const eq = vm.get(`SELECT item1, item2 FROM creature_equip_template WHERE entry = ? AND patch_min <= 10 ORDER BY patch_min DESC LIMIT 1`, Number(t.equipment_id));
+  if (!eq) return [];
+  const out: [number, number][] = [];
+  for (const id of [Number(eq.item1), Number(eq.item2)]) {
+    const it = id ? vm.cachedItem(id) : undefined;
+    out.push(it ? [Number(it.display_id), Number(it.inventory_type)] : [0, 0]);
+  }
+  return out.some(([d]) => d) ? out : [];
+}
+
 function creatureDef(t: Row, classStats: Map<string, Row>, vm: VMangos, items: Set<number>, hostile: Faction[]): CreatureDef | null {
   const levelMin = Number(t.level_min), levelMax = Number(t.level_max);
   const stats: CreatureDef['stats'] = [];
@@ -414,6 +443,7 @@ function creatureDef(t: Row, classStats: Map<string, Row>, vm: VMangos, items: S
     id: Number(t.entry), name: String(t.name), subname: String(t.subname ?? ''),
     levelMin, levelMax, rank: Number(t.rank), type: Number(t.type), displayIds, attackMs, stats,
     ...(Number(t.pet_family) ? { family: Number(t.pet_family) } : {}),
+    ...(() => { const eq = npcEquip(vm, t); return eq.length ? { equip: eq } : {}; })(),
     goldMin: Number(t.gold_min), goldMax: Number(t.gold_max),
     loot: vm.loot('creature_loot_template', Number(t.loot_id), items),
     ...(Number(t.skinning_loot_id) ? { skin: vm.loot('skinning_loot_template', Number(t.skinning_loot_id), items) ?? undefined } : {}),

@@ -37,6 +37,9 @@ export const displayEntry = (id: number) => {
 };
 
 const MOB_X = 1.6, PLAYER_X = -1.6, PET_X = -0.3;
+/** A humanoid creature's weapons (creature_equip_template) as gear: main hand, then off hand. */
+export const npcGear = (equip?: [number, number][]) => (equip ?? []).flatMap(([displayId, invType], i) =>
+  displayId ? [{ displayId, invType, slot: i === 0 ? 'mainhand' : 'offhand' }] : []);
 type Who = 'player' | 'mob' | 'pet';
 
 /** The Elwynn clearing every scene stands in: sky, light, grass and dirt from the client, real trees. */
@@ -165,14 +168,14 @@ export class Diorama {
    * Shows the creature for `displayIds`: `pick` chooses which display this spawn uses (creatures can
    * have up to four). Humanoid displays are assembled from a race model. Null clears the mob.
    */
-  async setMob(displayIds: number[] | null, pick = 0) {
+  async setMob(displayIds: number[] | null, pick = 0, equip?: [number, number][]) {
     const key = displayIds ? `${displayIds.join(',')}#${pick}` : '';
     if (key === this.mobKey) return;
     this.mobKey = key;
     const token = ++this.loadToken;
     if (this.mob) { this.scene.remove(this.mob.root); this.mob = null; }
     if (!displayIds?.length) return;
-    const model = await this.loadCreature(displayIds, pick);
+    const model = await this.loadCreature(displayIds, pick, equip);
     if (token !== this.loadToken || this.disposed || !model) return;
     // A new arrival replaces any corpse still sinking at the same spot.
     if (this.fadeOut) { this.scene.remove(this.fadeOut.actor.root); this.fadeOut = null; }
@@ -185,14 +188,14 @@ export class Diorama {
   }
 
   /** A creature model: this spawn's display first, then the others, until one converts. */
-  private async loadCreature(displayIds: number[], pick = 0): Promise<ActorModel | null> {
+  private async loadCreature(displayIds: number[], pick = 0, equip?: [number, number][]): Promise<ActorModel | null> {
     let id: number | undefined, entry: DisplayEntry | null = null;
     for (let i = 0; i < displayIds.length && !entry; i++) {
       id = displayIds[(pick + i) % displayIds.length];
       entry = await displayEntry(id);
     }
     if (entry?.humanoid) {
-      const built = await buildCharacter(entry.humanoid);
+      const built = await buildCharacter({ ...entry.humanoid, gear: npcGear(equip) });
       return built ? this.actorFrom(built.root, built.animations, built.durations, entry.scale || 1) : null;
     }
     if (entry) return this.loadActor(`creatures/${id}.glb`, entry.scale || 1);

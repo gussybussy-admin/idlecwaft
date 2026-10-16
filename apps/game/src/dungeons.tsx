@@ -303,7 +303,7 @@ function ReplayPlayer({ data, rep, onClose, started, ends, watching }: {
               apply(e, st, [], () => {}, true);
               if (e.k === 'pull') lastPull = e;
             }
-            if (lastPull) dio.current?.setMobs(lastPull.mobs.filter(m => (st.mobs.get(m.uid)?.hp ?? 0) > 0).map(m => ({ uid: m.uid, displayIds: data.creatures[m.id]?.displayIds ?? [] })));
+            if (lastPull) dio.current?.setMobs(lastPull.mobs.filter(m => (st.mobs.get(m.uid)?.hp ?? 0) > 0).map(m => ({ uid: m.uid, displayIds: data.creatures[m.id]?.displayIds ?? [], equip: data.creatures[m.id]?.equip })));
           }
           st.t = target;
         } else {
@@ -327,7 +327,7 @@ function ReplayPlayer({ data, rep, onClose, started, ends, watching }: {
           st.mobs = new Map(e.mobs.map(m => [m.uid, { id: m.id, hp: m.hp, max: m.hp }]));
           st.hp = snapshots.map(s => s.maxHp);
           g?.reviveParty();
-          g?.setMobs(e.mobs.map(m => ({ uid: m.uid, displayIds: data.creatures[m.id]?.displayIds ?? [] })));
+          g?.setMobs(e.mobs.map(m => ({ uid: m.uid, displayIds: data.creatures[m.id]?.displayIds ?? [], equip: data.creatures[m.id]?.equip })));
           if (g) sound.play(data.creatures[e.mobs[0]?.id]?.sounds?.aggro, 'voices');
           lines.push(`— Pull ${e.enc + 1}: ${e.mobs.map(m => data.creatures[m.id]?.name).join(', ')}`);
           break;
@@ -363,7 +363,7 @@ function ReplayPlayer({ data, rep, onClose, started, ends, watching }: {
           break;
         case 'adds':
           for (const m of e.mobs) st.mobs.set(m.uid, { id: m.id, hp: m.hp, max: m.hp });
-          g?.setMobs([...st.mobs].filter(([, m]) => m.hp > 0).map(([uid, m]) => ({ uid, displayIds: data.creatures[m.id]?.displayIds ?? [] })));
+          g?.setMobs([...st.mobs].filter(([, m]) => m.hp > 0).map(([uid, m]) => ({ uid, displayIds: data.creatures[m.id]?.displayIds ?? [], equip: data.creatures[m.id]?.equip })));
           lines.push(`— ${e.name}`);
           break;
         case 'clear': lines.push(`Pull ${e.enc + 1} cleared.`); break;

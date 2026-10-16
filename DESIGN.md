@@ -41,6 +41,8 @@ Living document for the core systems. Sections marked *TBD* get filled in as eac
 | Leveling pace | **About half of the earlier pace**: 1–60 takes roughly three weeks of idling; quests carry more of the experience (Phase 7). |
 | Pets and ranged | **Hunters shoot and tame a beast; warlocks summon demons** (Phase 7). |
 | Bags | **Slot limits**: a 16-slot backpack plus four bags (Phase 7). |
+| Storage | **A personal bank and bigger stacks**: 200 bank slots, auto-deposit when the bags are full; raw materials stack to 200 (Phase 8). |
+| Launcher distribution | **From the guild server only**: the exe isn't committed; friends download it from the server (Phase 8). |
 
 ## Client data (Phase 0 recon, build 5875 enUS)
 
@@ -394,16 +396,15 @@ class in turn (mage, rogue, warlock, hunter with a beast, warrior); with them, O
 
 ### Known gaps
 
-- Raid bosses are plain fights plus their signature abilities: phases, adds, positioning (Ragnaros's
-  submerge, Nefarian's class calls, C'Thun's tentacles, Four Horsemen rotations) aren't simulated.
-- Raid attunements and the reputation turn-ins (Zandalar, Cenarion Circle, Brood of Nozdormu) aren't in.
+- Raid boss phases are adds, untargetable stretches and damage-taken changes; positioning, class calls,
+  mind control and the Four Horsemen's rotation (they're fought one by one) aren't simulated. Reputation
+  turn-ins (Zandalar coins and bijous, Cenarion and Brood items) aren't in; kill reputation is.
 - Bosses that only appear through scripted events (Timmy the Cruel, Fras Siabi, Gahz'rilla) aren't in
   runs, and scripted encounters (VanCleef's adds, Balnazzar's transformation) are plain fights.
-- Lockpicking, totems, poisons/imbues, wands and crowd control aren't idleized yet (rogues are the
-  weakest damage dealers without poisons); pets have no abilities or loyalty of their own.
-- Profession specializations (Elemental/Dragonscale, Gnomish/Goblin, ...) and their reputations.
-- Belts, bracers' own models and enchant glows aren't shown on characters; humanoid NPCs still use
-  their baked body textures (their weapons aren't attached yet).
+- Lockpicking, shaman weapon imbues and solo crowd control aren't idleized; poisons and totems are
+  automatic (no poison items or totem placement); pets have one special each and no loyalty levels.
+- Enchant glows are halos and a light in the enchantment's colour, not the client's particle models;
+  humanoid NPCs still use their baked body textures.
 - Environment-mapped overlay layers are skipped; global-sequence tracks are held at their first key;
   hermite/bezier keys play linearly.
 - The launcher exe isn't code-signed, so Windows SmartScreen warns on first run.
@@ -446,6 +447,53 @@ arrive (the bags can then be over full). Characters from before the limit got fo
 **Small things.** Toasts for level-ups and for why an action stopped (full bags, no reagents), the
 browser tab title shows what the character is doing, and the game data is revalidated instead of
 downloaded again on every start.
+
+## Phase 8 — gaps filled
+
+**Storage.** A personal bank of 200 slots, open anywhere (the Bags page), with deposit and take-out,
+"Deposit materials" (everything but tools, food, potions, ammo and bags), and **auto-deposit**: what the
+bags can't hold goes to the bank (on by default), so gathering keeps going. Raw materials — trade goods
+and everything gathered, fished or skinned that stacks (raw fish, ore, herbs, leather, cloth) — stack to
+200 instead of 5–20.
+
+**Launcher.** `release/IdlecraftLauncher.exe` is no longer committed; the guild server offers it at
+`/api/launcher/download` (and launchers update from there as before).
+
+**Classes.** Rogues who know Instant Poison (from 20) and Deadly Poison (30) keep their weapons poisoned:
+Instant Poison deals the rank's nature damage on 20% of melee hits, Deadly Poison stacks a 12 s damage over
+time up to five times on 30% of hits. Shamans drop totems as each fight starts: Searing Totem (from 10,
+fire damage every 2.5 s), Strength of Earth (Strength) and Healing Stream (from 20, health every 2 s).
+Mages, priests and warlocks with a wand shoot it instead of meleeing (magic damage, no armor, no ammo).
+In groups, crowd control depends on who's there: each mage (Polymorph: beasts, humanoids, critters),
+rogue (Sap: humanoids), warlock (Fear), hunter (Freezing Trap), priest (Shackle Undead) and druid
+(Hibernate: beasts, dragonkin) holds one mob of a pack; bosses are never held.
+
+**Pets.** Beasts Bite every 8 seconds and the Succubus uses Lash of Pain every 12 (stronger swings); the
+Voidwalker sacrifices itself to shield its master below 20% health; the Imp's Blood Pact adds Stamina.
+Beasts have happiness: each kill costs some, and between fights the beast eats from your bags when it
+isn't happy — only its family's diet (CreatureFamily.dbc: wolves eat meat, bears everything, ...) and
+nothing far below its level. Unhappy pets deal 75% damage, happy ones 125%.
+
+**Raids.** Boss phases (`raid-mechanics.ts`): Onyxia takes to the air at 65% (whelps join; she takes half
+damage until 40%), Ragnaros submerges after three minutes (untargetable for 90 s while eight Sons of Flame
+fight), Nefarian waits behind his drakonids and raises bone constructs at 20%, C'Thun spawns claw and eye
+tentacles on timers, Kel'Thuzad's Scourge comes first and Guardians of Icecrown join at 40%; Majordomo
+brings his Flamewakers, Hakkar his sons, Ossirian sand vortices. Replays show the adds arriving.
+Attunements: Molten Core needs a Blackrock Depths clear (or Attunement to the Core), Onyxia an Upper
+Blackrock Spire clear, Blackwing Lair a Lower Blackrock Spire clear, Naxxramas Honored with the Argent Dawn
+(or the Dread Citadel quest); clears from earlier runs count. Runs now give the kills' reputation
+(Hydraxian Waterlords, Zandalar, Cenarion Circle, Brood of Nozdormu, ...). With phases, a hireling raid
+beats Onyxia about a quarter of the time; the other tier-1 raids still clear.
+
+**Professions.** Specializations from the specialist trainers: Armorsmith or Weaponsmith (skill 200,
+level 40), then Master Swordsmith, Hammersmith or Axesmith (250); Dragonscale, Elemental or Tribal
+Leatherworking (225, level 40); Gnomish or Goblin Engineering (200, level 30). A specialization's recipes
+(those only its trainers teach, or whose plans require it) need it; switching to the other choice forgets
+the old one's recipes.
+
+**Visuals.** Belts show their buckle geoset; weapons with a glowing enchantment (Crusader, Fiery,
++Damage, ...) get halos and a light in its colour and strength (from ItemVisuals); humanoid creatures hold
+their weapons and shields (creature_equip_template), in solo fights and in replays.
 
 ## Launcher (`apps/launcher`)
 

@@ -169,7 +169,7 @@ export function ActionScene({ s, data, hint }: P & { hint?: string }) {
           break;
         }
         case 'heal': float('player', `+${e.amount}`, 'heal', 'player'); sound.play(e.spell ? data.spells[e.spell]?.sound?.impact ?? data.spells[e.spell]?.sound?.cast : snd?.ui.eat); break;
-        case 'spawn': mobId = e.mob.id; d.setMob(data.creatures[e.mob.id]?.displayIds ?? null, Math.floor(e.t / 1000)); sound.play(data.creatures[e.mob.id]?.sounds?.aggro, 'voices'); break;
+        case 'spawn': mobId = e.mob.id; d.setMob(data.creatures[e.mob.id]?.displayIds ?? null, Math.floor(e.t / 1000), data.creatures[e.mob.id]?.equip); sound.play(data.creatures[e.mob.id]?.sounds?.aggro, 'voices'); break;
         case 'kill': d.die('mob'); sound.play(data.creatures[e.creature]?.sounds?.death, 'voices'); if (e.gold) sound.play(snd?.ui.coins, 'effects', 0.6); break;
         case 'eat': sound.play(snd?.ui.eat); break;
         case 'petdeath': d.die('pet'); break;
@@ -195,7 +195,7 @@ export function ActionScene({ s, data, hint }: P & { hint?: string }) {
   const def = mob ? data.creatures[mob.id] : a?.kind === 'fight' ? data.creatures[a.creature] : null;
   // Mounting mid-fight (or after a reload): show the current mob without waiting for the next spawn.
   // Later spawns arrive as events, so this runs once.
-  useEffect(() => { if (mob && def) dio.current?.setMob(def.displayIds, 0); }, []);
+  useEffect(() => { if (mob && def) dio.current?.setMob(def.displayIds, 0, def.equip); }, []);
   useEffect(() => { if (a?.kind !== 'fight') dio.current?.setMob(null); }, [a?.kind]);
 
   const look = s.char.look ?? { sex: 0, skin: 0, face: 0, hairStyle: 0, hairColor: 0, facialHair: 0 };
@@ -206,7 +206,8 @@ export function ActionScene({ s, data, hint }: P & { hint?: string }) {
   const gear = SLOTS.flatMap(slot => {
     if (tool && (slot === 'mainhand' || slot === 'offhand')) return [];
     const it = s.equipment[slot] ? data.items[s.equipment[slot]!] : undefined;
-    return it?.displayId ? [{ displayId: it.displayId, invType: it.invType, slot }] : [];
+    const glow = s.enchants?.[slot] ? data.enchants[s.enchants[slot]!]?.glow : undefined;
+    return it?.displayId ? [{ displayId: it.displayId, invType: it.invType, slot, ...(glow ? { glow } : {}) }] : [];
   });
   if (tool) gear.push({ displayId: tool.displayId, invType: tool.invType, slot: 'mainhand' });
   useEffect(() => { dio.current?.setPlayer({ race: s.char.race, ...look }, gear); }, [s.char.race, JSON.stringify(look), JSON.stringify(gear)]);

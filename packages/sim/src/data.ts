@@ -73,6 +73,8 @@ export interface EnchantDef {
   id: number; name: string;
   stats: [number, number][]; // [statType, value] like ItemDef.stats
   hp: number; mana: number; armor: number; ap: number; dmg: number;
+  /** Weapon glow (ItemVisuals): colour (0xRRGGBB) and strength 1-3. */
+  glow?: { color: number; size: number };
 }
 
 export interface CreatureDef {
@@ -94,6 +96,8 @@ export interface CreatureDef {
   skin?: LootRef;
   /** Spells it casts in fights (the group simulation's boss mechanics). */
   abilities?: CreatureAbility[];
+  /** What a humanoid holds: [item displayId, inventory type] for main hand, off hand (creature_equip_template). */
+  equip?: [number, number][];
   /** Hunter pet family (CreatureFamily.dbc), when the beast can be tamed. */
   family?: number;
   /** Voice and combat sounds (SoundEntries ids): aggro, wound, death, attack. */
