@@ -78,7 +78,7 @@ export function parseCommand(raw: unknown): Command | null {
     case 'train': return PROFESSIONS.includes(c.skill as Profession) ? { name: 'train', skill: c.skill as Profession } : null;
     case 'learnRecipe': return int(c.recipe, 1, 1e7) ? { name: 'learnRecipe', recipe: c.recipe as number } : null;
     case 'buy': case 'sell':
-      return int(c.item, 1, 1e7) && int(c.count, 1, 1000) ? { name: c.name, item: c.item as number, count: c.count as number } : null;
+      return int(c.item, 1, 1e7) && int(c.count, 1, 1e6) ? { name: c.name, item: c.item as number, count: c.count as number } : null;
     case 'equip': return int(c.item, 1, 1e7) ? { name: 'equip', item: c.item as number } : null;
     case 'unequip': return SLOTS.includes(c.slot as Slot) ? { name: 'unequip', slot: c.slot as Slot } : null;
     case 'settings': {

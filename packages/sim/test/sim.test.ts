@@ -775,3 +775,10 @@ describe('bags', () => {
     expect(migrateState(s, d).bags).toEqual([40, 40, 40, 40]);
   });
 });
+
+describe('commands from the network', () => {
+  it('accept selling a whole large stack at once', () => {
+    expect(parseCommand({ name: 'sell', item: 3, count: 1450 })).toEqual({ name: 'sell', item: 3, count: 1450 });
+    expect(parseCommand({ name: 'sell', item: 3, count: 0 })).toBeNull();
+  });
+});

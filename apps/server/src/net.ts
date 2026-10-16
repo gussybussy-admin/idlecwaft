@@ -150,7 +150,10 @@ export function createServer({ db, world, gameDataJson, clock = Date.now, launch
         }
         case 'cmd': {
           const cmd = parseCommand(msg.cmd);
-          return reply(cmd ? world.command(acct.accountId, cmd) : { ok: false, error: 'Unknown command.' });
+          if (cmd) return reply(world.command(acct.accountId, cmd));
+          // The client already applied it locally: send the real state back so it doesn't stay out of sync.
+          world.resync(acct.accountId);
+          return reply({ ok: false, error: 'Unknown command.' });
         }
         case 'chat': { const r = world.chat(acct.accountId, msg.text); if (!r.ok) send(ws, { t: 'error', error: r.error }); return; }
         case 'bank':

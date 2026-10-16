@@ -168,6 +168,9 @@ export class World {
 
   // ------------------------------------------------------------------ commands
 
+  /** Sends this account its current state again (after a command the server couldn't take). */
+  resync(accountId: number): void { this.emit('state', accountId); }
+
   command(accountId: number, cmd: Command): CommandResult {
     const c = this.chars.get(accountId);
     if (!c) return fail('No character.');
