@@ -3,7 +3,7 @@
 import {
   addItem, advance, applyCommand, emptySummary, hasItem, migrateState, newGame, OFFLINE_CAP_MS, SKILL_NAME, summarize,
   type Appearance, type BankLogEntry, type ChatMessage, type Command, type CommandResult, type FeedItem,
-  applyRunRewards, dungeonLoot, roomFor, factionOfRace, groupRoles, MAX_TARGETS, nextReset, hireling, ROLE_CLASSES, ROLES, simulateRun, snapshotOf,
+  applyRunRewards, attunementError, dungeonLoot, roomFor, factionOfRace, groupRoles, MAX_TARGETS, nextReset, hireling, ROLE_CLASSES, ROLES, simulateRun, snapshotOf,
   type CraftOrder, type DungeonGroup, type GroupMember, type Role, type RunResult, type RunSummary, type Snapshot, type GameData, type GameState, type GuildRequest, type GuildSnapshot, type RosterEntry, type SimEvent, type Summary,
 } from '@idle/sim';
 import type { DB } from './db.js';
@@ -58,6 +58,14 @@ export class World {
         accountId: r.account_id, name: r.name, state: migrateState(JSON.parse(r.state), this.data), lastSeen: r.last_seen, online: 0,
         away: r.away ? JSON.parse(r.away) : null, dirty: false, chatTimes: [], lastKillFeed: new Map(),
       });
+    }
+    // Clears from runs before characters kept track of them (attunements).
+    for (const run of db.prepare(`SELECT dungeon, snapshots, result FROM dungeon_runs WHERE delivered = 1`).all() as { dungeon: number; snapshots: string; result: string }[]) {
+      if (!(JSON.parse(run.result) as RunResult).cleared) continue;
+      for (const sn of JSON.parse(run.snapshots) as Snapshot[]) {
+        const c = sn.accountId != null && !sn.hireling ? this.chars.get(sn.accountId) : undefined;
+        if (c && !(c.state.cleared ??= []).includes(run.dungeon)) c.state.cleared.push(run.dungeon);
+      }
     }
   }
 
@@ -439,6 +447,8 @@ export class World {
     if (!ROLE_CLASSES[role as Role].includes(c.state.char.cls)) return `${this.data.classes.find(x => x.id === c.state.char.cls)?.name ?? 'Your class'}s can't ${role === 'tank' ? 'tank' : 'heal'}.`;
     if (c.state.char.level < d.minLevel) return `Requires level ${d.minLevel}.`;
     if (c.state.action?.kind === 'dungeon') return "You're already in a dungeon.";
+    const att = attunementError(c.state, this.data, d);
+    if (att) return att;
     const locked = this.lockedUntil(c.accountId, dungeon);
     if (locked) return `You're saved to ${d.name} until it resets (${new Date(locked).toUTCString().slice(0, 22)} UTC).`;
     const open = (this.db.prepare(`SELECT members FROM dungeon_groups WHERE status = 'open'`).all() as { members: string }[])
@@ -544,6 +554,7 @@ export class World {
       if (c.state.action?.kind === 'dungeon') return fail(`${m.name} is already in a dungeon.`);
       if (c.state.phase.p === 'dead') return fail(`${m.name} is dead.`);
       if (d.raid && this.lockedUntil(c.accountId, g.dungeon)) return fail(`${m.name} is saved to ${d.name}.`);
+      if (attunementError(c.state, this.data, d)) return fail(`${m.name} isn't attuned to ${d.name}.`);
       const target = Math.min(c.state.char.level, d.maxLevel);
       snaps.push(snapshotOf(c.state, this.data, c.accountId, m.role, Math.max(d.minLevel, target), { targets: m.targets, consumables: true }));
     }

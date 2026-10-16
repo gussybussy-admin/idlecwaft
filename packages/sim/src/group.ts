@@ -9,7 +9,7 @@
 import type { CreatureDef, GameData, ItemDef } from './data.js';
 import { HUNTER, TAME_LEVEL } from './pets.js';
 import { factionOfRace } from './data.js';
-import type { AbilityEffect, CreatureAbility, DungeonDef } from './dungeons.js';
+import type { AbilityEffect, BossPhase, CreatureAbility, DungeonDef } from './dungeons.js';
 import { advance, equipSlots, grantXp, playerStats, proficiencyFor, type SimEvent } from './engine.js';
 import { activeTalentEffects } from './talents.js';
 import { knownSpells, modded } from './combat.js';
@@ -18,7 +18,7 @@ import { armorReduction, killXp, missChance, SKILL_DEFENSE } from './formulas.js
 import { rollLoot } from './loot.js';
 import { chance, int, next, seedRng, type RngState } from './rng.js';
 import { addItem, log, newGame, SLOTS, type Appearance, type GameState, type Slot } from './state.js';
-import { creditKill, neededQuestItems } from './quests.js';
+import { creditKill, gainRep, neededQuestItems, repRank, sideOf, standing } from './quests.js';
 
 export type Role = 'tank' | 'healer' | 'dps';
 export const ROLES: Role[] = ['tank', 'healer', 'dps'];
@@ -319,7 +319,8 @@ export type RunEvent =
   | { t: number; k: 'die'; who: number; mob: boolean }
   | { t: number; k: 'clear'; enc: number }
   | { t: number; k: 'wipe'; enc: number }
-  | { t: number; k: 'rest'; ms: number };
+  | { t: number; k: 'rest'; ms: number }
+  | { t: number; k: 'adds'; name: string; mobs: { uid: number; id: number; level: number; hp: number }[] };
 
 export interface RunLoot { item: number; count: number; winner: number | null; boss: number | null; rolls: { member: number; roll: number; need: boolean }[]; targeted?: boolean }
 
@@ -407,7 +408,7 @@ export function simulateRun(data: GameData, dungeon: DungeonDef, rawSnaps: Snaps
       }
       if (!mobs.length) { cleared = true; break; }
       events.push({ t, k: 'pull', enc, mobs: mobs.map(m => ({ uid: m.uid, id: m.def.id, level: m.level, hp: m.maxHp })) });
-      cleared = fight(data, members, mobs, rng, t, events, (dt) => { t = dt; }, use, e.boss);
+      cleared = fight(data, members, mobs, rng, t, events, (dt) => { t = dt; }, use, e.boss, e.phases, def => spawnMob(def, ++uid, rng, t));
       for (const m of mobs) if (m.hp <= 0) {
         kills.push(m.def.id);
         gold += m.def.goldMax ? int(rng, m.def.goldMin, m.def.goldMax) : 0;
@@ -447,21 +448,43 @@ const resisted = (m: Member, school: number, level: number) =>
   school > 0 ? Math.min(0.75, ((m.snap.resist[school] ?? 0) / Math.max(1, level * 5)) * 0.75) : 0;
 
 function fight(data: GameData, members: Member[], mobs: Mob[], rng: RngState, start: number, events: RunEvent[], setT: (t: number) => void,
-  use: (member: number, item: number) => void, boss?: number): boolean {
+  use: (member: number, item: number) => void, boss?: number, phases: BossPhase[] = [], spawn?: (def: CreatureDef) => Mob): boolean {
   const alive = () => members.filter(m => !m.dead);
   // Tanks: the first holds the boss (and the first mob); the others pick up the rest of the pack.
   const tanks = members.map((m, i) => (m.snap.role === 'tank' ? i : -1)).filter(i => i >= 0);
   const healerRank = new Map(members.map((m, i) => (m.snap.role === 'healer' ? i : -1)).filter(i => i >= 0).map((i, k) => [i, k]));
   let tauntLostUntil = 0;
   let t = start;
+  // Boss phases: which have fired, when timed ones come next, and the boss's state.
+  const bossMob = boss ? mobs.find(m => m.def.id === boss) : undefined;
+  const fired = phases.map(() => false);
+  const nextAt = phases.map(p => (p.atMs !== undefined ? start + p.atMs : Infinity));
+  let hiddenUntil: number | 'adds' = 0, dmgTaken = 1, dmgUntilPct = 0;
+  const bossHidden = () => !!bossMob && (hiddenUntil === 'adds' ? mobs.some(m => m !== bossMob && m.hp > 0) : t < hiddenUntil);
   for (let sec = 0; sec < PULL_LIMIT_S; sec++) {
     t += 1000;
+    if (bossMob && bossMob.hp > 0) phases.forEach((p, k) => {
+      const due = p.hpPct !== undefined ? !fired[k] && bossMob.hp <= bossMob.maxHp * p.hpPct / 100 : t >= nextAt[k];
+      if (!due) return;
+      fired[k] = true;
+      nextAt[k] = p.everyMs ? nextAt[k] + p.everyMs : Infinity;
+      const added: Mob[] = [];
+      for (const [id, n] of p.adds ?? []) { const def = data.creatures[id]; if (def && spawn) for (let i = 0; i < n; i++) added.push(spawn(def)); }
+      for (const m of added) { m.nextSwing = t + 1500; m.timers = m.timers.map(x => x - start + t); }
+      mobs.push(...added);
+      events.push({ t, k: 'adds', name: p.name, mobs: added.map(m => ({ uid: m.uid, id: m.def.id, level: m.level, hp: m.maxHp })) });
+      if (p.untargetable) hiddenUntil = p.untargetable === 'adds' ? 'adds' : t + p.untargetable;
+      if (p.damageTaken) { dmgTaken = p.damageTaken; dmgUntilPct = p.untilHpPct ?? 0; }
+    });
+    if ((hiddenUntil as number | 'adds') === 'adds' && !bossHidden()) hiddenUntil = 0;
+    if (bossMob && dmgTaken !== 1 && bossMob.hp <= bossMob.maxHp * dmgUntilPct / 100) dmgTaken = 1;
     const living = mobs.filter(m => m.hp > 0);
     if (!living.length) { setT(t); return true; }
     if (!alive().length) { setT(t); return false; }
     // Kill order: casters that crowd-control or heal first (as groups do), then the weakest.
     const danger = (m: Mob) => (m.def.abilities ?? []).some(a => a.effects.some(e => e.k === 'cc' || e.k === 'heal')) ? 0 : 1;
-    const pickFocus = () => mobs.filter(m => m.hp > 0).sort((a, b) => danger(a) - danger(b) || a.hp - b.hp)[0];
+    const hidden = bossHidden();
+    const pickFocus = () => mobs.filter(m => m.hp > 0 && !(hidden && m === bossMob)).sort((a, b) => danger(a) - danger(b) || a.hp - b.hp)[0];
 
     // ---- members act
     members.forEach((m, i) => {
@@ -517,7 +540,7 @@ function fight(data: GameData, members: Member[], mobs: Mob[], rng: RngState, st
       const focus = pickFocus(); // the next living target (no damage wasted on a mob that just died)
       if (!focus) return;
       const crit = chance(rng, 10);
-      const amt = Math.max(1, Math.round(dps * (0.85 + next(rng) * 0.3) * (crit ? 1.5 : 1)));
+      const amt = Math.max(1, Math.round(dps * (0.85 + next(rng) * 0.3) * (crit ? 1.5 : 1) * (focus === bossMob ? dmgTaken : 1)));
       focus.hp -= amt;
       events.push({ t, k: 'hit', src: i, dst: focus.uid, mob: false, amt, ...(crit ? { crit } : {}) });
       if (focus.hp <= 0) events.push({ t, k: 'die', who: focus.uid, mob: true });
@@ -526,7 +549,7 @@ function fight(data: GameData, members: Member[], mobs: Mob[], rng: RngState, st
     // ---- mobs act
     // Crowd control: each member who can hold a mob (Polymorph, Sap, Fear, Freezing Trap, Shackle Undead,
     // Hibernate) holds one the first mob isn't; bosses are never controlled. The rest fight.
-    const active = new Set(living);
+    const active = new Set(living.filter(m => !(hidden && m === bossMob)));
     const ccers = members.filter(m => !m.dead && m.ccUntil <= t && CC_TYPES[m.snap.cls]);
     for (const mob of living.slice(1).reverse()) {
       if (mob.def.id === boss || mob.def.rank === 3) continue;
@@ -536,7 +559,7 @@ function fight(data: GameData, members: Member[], mobs: Mob[], rng: RngState, st
       active.delete(mob);
     }
     for (const mob of mobs) {
-      if (mob.hp <= 0 || !active.has(mob)) continue;
+      if (mob.hp <= 0 || !active.has(mob) || (hidden && mob === bossMob)) continue;
       const target = (): number => {
         if (tauntLostUntil <= t && tanks.length) {
           const mine = tanks[mobs.indexOf(mob) % tanks.length];
@@ -717,10 +740,24 @@ export function applyRunRewards(s: GameState, data: GameData, r: RunResult, memb
       questItems.set(item, (questItems.get(item) ?? 0) + n);
     }
   }
+  // Reputation from the kills (Hydraxian Waterlords in Molten Core, Zandalar in Zul'Gurub, the Brood of
+  // Nozdormu and the Cenarion Circle in Ahn'Qiraj, ...), as if you'd killed them yourself.
+  for (const id of r.kills) for (const rep of data.creatures[id]?.rep ?? []) if (!rep.side || rep.side === sideOf(s, data)) gainRep(s, data, rep.faction, rep.value, rep.maxRank);
+  if (r.cleared && !(s.cleared ??= []).includes(r.dungeon)) s.cleared.push(r.dungeon);
   grantXp(s, data, xp);
   const name = data.dungeons?.[r.dungeon]?.name ?? 'the dungeon';
   log(s, 'loot', `${name}: ${r.cleared ? 'cleared' : `${r.progress} of ${data.dungeons?.[r.dungeon]?.encounters.length ?? '?'} pulls`}, ${xp} XP${items.length ? `, ${items.map(([i]) => data.items[i]?.name ?? i).join(', ')}` : ''}.`);
   return { xp, gold, items, questItems: [...questItems] };
+}
+
+/** Whether this character is attuned to a raid (null), or what's missing. */
+export function attunementError(s: GameState, data: GameData, d: DungeonDef): string | null {
+  const a = d.attune;
+  if (!a) return null;
+  if (a.dungeon && s.cleared?.includes(a.dungeon)) return null;
+  if (a.quest && s.questsDone?.includes(a.quest)) return null;
+  if (a.rep && repRank(standing(s, data, a.rep[0])) >= a.rep[1]) return null;
+  return `Requires attunement: ${a.text}.`;
 }
 
 /** How many tanks and healers a group of this size runs with (the rest deal damage). */

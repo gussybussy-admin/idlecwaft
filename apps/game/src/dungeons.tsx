@@ -1,7 +1,7 @@
 // Dungeons: the list of instances, the guild's group board (sign up with a role), runs, and 3D replays.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  dungeonLoot, MAX_TARGETS, nextReset, ROLE_CLASSES, type DungeonDef, type DungeonGroup, type GameData, type GameState, type GuildSnapshot, type Role, type RunEvent,
+  attunementError, dungeonLoot, MAX_TARGETS, nextReset, ROLE_CLASSES, type DungeonDef, type DungeonGroup, type GameData, type GameState, type GuildSnapshot, type Role, type RunEvent,
   type RunResult, type Snapshot,
 } from '@idle/sim';
 import { game } from './game.js';
@@ -87,17 +87,19 @@ function RaidsPanel({ s, data, g, raids, roles, blocked, me }: { s: GameState; d
           const saved = (g.lockouts ?? []).filter(l => l.dungeon === d.id && l.until > now).map(l => l.name);
           const bosses = d.encounters.filter(e => e.boss);
           const tooLow = s.char.level < d.minLevel;
+          const att = attunementError(s, data, d);
           return (
             <div key={d.id} className="card">
               <div className="title">{d.name} <span className="tag">{TIER_LABEL[d.tier ?? 0] ?? ''}</span></div>
-              <div className="meta">{d.size} players · {bosses.length} bosses · {d.encounters.length} pulls</div>
+              {d.attune && <div className="meta" style={{ color: att ? 'var(--c-red)' : 'var(--c-green)' }}>{att ? d.attune.text : 'Attuned'}</div>}
+              <div className="meta">{d.size} players · {bosses.length} {bosses.length === 1 ? "boss" : "bosses"} · {d.encounters.length} pulls</div>
               <div className="meta" style={{ color: lock ? 'var(--c-red)' : undefined }}>
                 {lock ? `You're saved · resets in ${fmtTime(lock.until - now)}` : `Resets in ${fmtTime(nextReset(d, now) - now)}`}</div>
               {saved.length > 0 && <div className="meta">Saved: {saved.join(', ')}</div>}
               <div className="btn-row">
                 {roles.map(r => (
-                  <button key={r} className="btn secondary small" disabled={tooLow || blocked || !!lock}
-                    title={tooLow ? `Requires level ${d.minLevel}` : lock ? 'Saved to this raid' : blocked ? "You're already in a group" : ''}
+                  <button key={r} className="btn secondary small" disabled={tooLow || blocked || !!lock || !!att}
+                    title={tooLow ? `Requires level ${d.minLevel}` : att ?? (lock ? 'Saved to this raid' : blocked ? "You're already in a group" : '')}
                     onClick={() => setPicking({ dungeon: d.id, role: r })}>
                     <Icon name={ROLE_ICON[r]} size="sm" /> Form a raid as {ROLE_LABEL[r]}</button>))}
               </div>
@@ -358,6 +360,11 @@ function ReplayPlayer({ data, rep, onClose, started, ends, watching }: {
           g?.die(e.mob ? e.who : P(e.who), e.mob);
           if (g && e.mob) sound.play(data.creatures[st.mobs.get(e.who)?.id ?? 0]?.sounds?.death, 'voices');
           lines.push(e.mob ? `${mobName(e.who)} dies.` : `${snapshots[e.who]?.name} dies.`);
+          break;
+        case 'adds':
+          for (const m of e.mobs) st.mobs.set(m.uid, { id: m.id, hp: m.hp, max: m.hp });
+          g?.setMobs([...st.mobs].filter(([, m]) => m.hp > 0).map(([uid, m]) => ({ uid, displayIds: data.creatures[m.id]?.displayIds ?? [] })));
+          lines.push(`— ${e.name}`);
           break;
         case 'clear': lines.push(`Pull ${e.enc + 1} cleared.`); break;
         case 'wipe': lines.push(`The group wiped on pull ${e.enc + 1}.`); break;

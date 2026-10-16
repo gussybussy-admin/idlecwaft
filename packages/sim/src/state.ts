@@ -91,6 +91,8 @@ export interface GameState {
   rep: Record<number, number>;
   action: Action | null;
   phase: Phase;
+  /** Dungeons and raids this character has cleared at least once (attunements). */
+  cleared?: number[];
   /** Your own bank (item -> count). */
   bank?: Record<number, number>;
   /** The four bag slots (container item ids). */

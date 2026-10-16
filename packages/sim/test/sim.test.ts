@@ -3,7 +3,7 @@ import {
   advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, planTravel, playerStats,
   rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, trainSpells, knownSpells,
   learnTalent, pointsSpent, modded, activeTalentEffects, resetTalents, resetCost,
-  disenchant, unlearnProfession, POISON_INSTANT, UNHAPPY, petStats, itemCategory, bagSpace, roomFor, equipBag, giveItem, activePet, rangedStats, dungeonLoot, nextReset, withRaidBuffs, groupRoles, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
+  disenchant, unlearnProfession, attunementError, POISON_INSTANT, UNHAPPY, petStats, itemCategory, bagSpace, roomFor, equipBag, giveItem, activePet, rangedStats, dungeonLoot, nextReset, withRaidBuffs, groupRoles, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
   type GameState, type SimEvent,
 } from '../src/index.js';
 import { fixture } from './fixture.js';
@@ -880,5 +880,34 @@ describe('pet happiness and abilities', () => {
     const sta = playerStats(w, d).sta;
     w.char.cls = 1;
     expect(sta - playerStats(w, d).sta).toBe(9);
+  });
+});
+
+describe('boss phases and attunements', () => {
+  it('a boss phase brings in adds when the boss drops below its health mark', () => {
+    const d = fixture();
+    const dg = { ...d.dungeons[1], encounters: [{ boss: 103, mobs: [[103, 1]] as [number, number][], phases: [{ name: 'The boars come', hpPct: 50, adds: [[100, 2]] as [number, number][] }] }] };
+    d.dungeons[1] = dg;
+    const char = (cls: number) => {
+      const s = newGame(d, { name: 'X', race: 1, cls, seed: 3, now: T0 });
+      s.char.level = 12;
+      s.spells = (d.classSpells[cls] ?? []).map(o => o.spell);
+      s.combatSkills = { 95: 60, 162: 60, 43: 60 };
+      return s;
+    };
+    const snaps = (['tank', 'healer', 'dps', 'dps', 'dps'] as Role[]).map((r, i) => snapshotOf(char(r === 'tank' ? 1 : 8), d, 100 + i, r, 12));
+    const r = simulateRun(d, dg, snaps, 4);
+    const adds = r.events.filter(e => e.k === 'adds');
+    expect(adds.length).toBeGreaterThan(0);
+    expect(adds[0].k === 'adds' && adds[0].mobs.length).toBe(2);
+    if (r.cleared) expect(r.kills.filter(k => k === 100).length).toBeGreaterThanOrEqual(2);
+  });
+  it('raids need their attunement: a cleared dungeon, a quest, or a reputation', () => {
+    const d = fixture();
+    const raid = { ...d.dungeons[1], id: 2, raid: true, attune: { dungeon: 1, text: 'clear Test Hold once' } };
+    const s = newGame(d, { name: 'X', race: 1, cls: 1, seed: 3, now: T0 });
+    expect(attunementError(s, d, raid)).toBe('Requires attunement: clear Test Hold once.');
+    s.cleared = [1];
+    expect(attunementError(s, d, raid)).toBeNull();
   });
 });

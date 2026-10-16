@@ -8,7 +8,7 @@ import type { AbilityEffect, CreatureAbility, CreatureDef, DungeonDef, Encounter
 import type { Client } from '../client.js';
 import type { ZoneLookup } from './zone-lookup.js';
 import { PATCH_1_12, type Row, type VMangos } from './vmangos.js';
-import { NOT_BOSSES, RAIDS, RAID_MECHANICS, raidAbilities } from './raid-mechanics.js';
+import { ATTUNE, NOT_BOSSES, PHASES, RAIDS, RAID_MECHANICS, raidAbilities } from './raid-mechanics.js';
 
 /** Raid lockouts reset every three days (the guild's choice; vanilla had weekly and 3/5-day resets). */
 const RAID_RESET_DAYS = 3;
@@ -212,11 +212,28 @@ export function buildDungeons(client: Client, vm: VMangos, zl: ZoneLookup, inp: 
       const def = byName(name);
       if (def) encounters.push({ boss: def.id, mobs: [[def.id, 1]] });
     }
+    // Scripted boss phases: the adds that join, and when.
+    for (const e of encounters) {
+      const spec = e.boss ? PHASES[String(inp.creatures[e.boss]?.name)] : undefined;
+      if (!spec) continue;
+      e.phases = spec.map(p => {
+        const { adds, ...rest } = p;
+        const ids = (adds ?? []).flatMap(([name, n]) => { const d = byName(name); return d ? [[d.id, n] as [number, number]] : []; });
+        return { ...rest, ...(ids.length ? { adds: ids } : {}) };
+      });
+    }
     out[run.lfg] = {
       id: run.lfg, name: run.name, map: run.map, zone: portalZone.get(run.map) ?? null,
       minLevel: run.min, maxLevel: run.max, size: run.size, encounters,
       ...(run.raid ? { raid: true, resetDays: RAID_RESET_DAYS, tier: run.tier } : {}),
     };
+  }
+  // Attunements, now that every run has its id.
+  for (const d of Object.values(out)) {
+    const a = d.raid ? ATTUNE[d.map] : undefined;
+    if (!a) continue;
+    const dungeon = a.dungeon ? Object.values(out).find(x => x.name === a.dungeon)?.id : undefined;
+    d.attune = { text: a.text, ...(dungeon ? { dungeon } : {}), ...(a.quest ? { quest: a.quest } : {}), ...(a.rep ? { rep: a.rep } : {}) };
   }
   return out;
 }

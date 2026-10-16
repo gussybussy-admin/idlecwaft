@@ -83,6 +83,39 @@ export const RAID_MECHANICS: Record<string, Mech[]> = {
 export const NOT_BOSSES = new Set(['Lord Victor Nefarius']);
 
 /** Raids: their final placed boss (for ordering) and bosses that only appear through events (appended last). */
+/** Boss phases (adds by creature name; see BossPhase). */
+export const PHASES: Record<string, { name: string; hpPct?: number; atMs?: number; everyMs?: number; adds?: [string, number][];
+  untargetable?: number | 'adds'; damageTaken?: number; untilHpPct?: number }[]> = {
+  'Onyxia': [
+    { name: 'Onyxia takes to the air; whelps pour out', hpPct: 65, adds: [['Onyxian Whelp', 6]], damageTaken: 0.5, untilHpPct: 40 },
+    { name: 'Onyxia lands, enraged', hpPct: 40, adds: [['Onyxian Lair Guard', 2]] },
+  ],
+  'Ragnaros': [{ name: 'Ragnaros submerges: the Sons of Flame rise', atMs: 180_000, everyMs: 270_000, adds: [['Son of Flame', 8]], untargetable: 90_000 }],
+  'Nefarian': [
+    { name: 'Lord Victor Nefarius sends his drakonids', atMs: 0, adds: [['Black Drakonid', 3], ['Red Drakonid', 3], ['Bronze Drakonid', 2]], untargetable: 'adds' },
+    { name: 'The fallen drakonids rise again', hpPct: 20, adds: [['Bone Construct', 6]] },
+  ],
+  "C'Thun": [
+    { name: 'Claw Tentacle', atMs: 8000, everyMs: 30_000, adds: [['Claw Tentacle', 1]] },
+    { name: 'Eye Tentacles burst from the ground', atMs: 45_000, everyMs: 45_000, adds: [['Eye Tentacle', 8]] },
+  ],
+  "Kel'Thuzad": [
+    { name: 'The Scourge of the Necropolis', atMs: 0, adds: [['Soldier of the Frozen Wastes', 8], ['Unstoppable Abomination', 2], ['Soul Weaver', 2]], untargetable: 'adds' },
+    { name: 'Guardians of Icecrown', hpPct: 40, adds: [['Guardian of Icecrown', 2]] },
+  ],
+  'Hakkar': [{ name: 'Sons of Hakkar', atMs: 20_000, everyMs: 60_000, adds: [['Son of Hakkar', 2]] }],
+  'Majordomo Executus': [{ name: 'Flamewaker guards', atMs: 0, adds: [['Flamewaker Healer', 4], ['Flamewaker Elite', 4]] }],
+  'Ossirian the Unscarred': [{ name: 'Sand vortices', atMs: 30_000, everyMs: 60_000, adds: [['Sand Vortex', 2]] }],
+};
+
+/** Raid attunements: clear a dungeon once (or complete its quest), or reach a reputation. */
+export const ATTUNE: Record<number, { dungeon?: string; quest?: number; rep?: [number, number]; text: string }> = {
+  409: { dungeon: 'Blackrock Depths', quest: 7848, text: 'Attunement to the Core: clear Blackrock Depths once' },
+  249: { dungeon: 'Upper Blackrock Spire', text: 'The Drakefire Amulet: clear Upper Blackrock Spire once' },
+  469: { dungeon: 'Lower Blackrock Spire', text: "Blackhand's Command: clear Lower Blackrock Spire once" },
+  533: { quest: 9123, rep: [529, 5], text: 'The Dread Citadel: Honored with the Argent Dawn' },
+};
+
 export const RAIDS: { map: number; size: number; tier: number; anchor: string; extra?: string[]; beforeFinal?: string[]; order?: string[] }[] = [
   { map: 409, size: 40, tier: 1, anchor: 'Golemagg the Incinerator', extra: ['Majordomo Executus', 'Ragnaros'],
     order: ['Lucifron', 'Magmadar', 'Gehennas', 'Garr', 'Baron Geddon', 'Shazzrah', 'Sulfuron Harbinger', 'Golemagg the Incinerator'] },

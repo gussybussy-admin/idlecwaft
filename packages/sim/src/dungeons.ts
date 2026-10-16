@@ -30,7 +30,20 @@ export interface CreatureAbility {
 }
 
 /** One pull: a trash pack, or a boss (with any adds in `mobs`). */
-export interface Encounter { boss?: number; mobs: [number, number][] }
+/**
+ * A boss phase: when it starts (boss health at or below hpPct, or atMs into the fight, repeating every
+ * everyMs), the adds that join, whether the boss can't be attacked meanwhile (for some ms, or until the
+ * adds are dead), and how much damage the boss takes until its health falls to untilHpPct.
+ */
+export interface BossPhase {
+  name: string;
+  hpPct?: number; atMs?: number; everyMs?: number;
+  adds?: [number, number][];
+  untargetable?: number | 'adds';
+  damageTaken?: number; untilHpPct?: number;
+}
+
+export interface Encounter { boss?: number; mobs: [number, number][]; phases?: BossPhase[] }
 
 export interface DungeonDef {
   id: number; name: string; map: number;
@@ -44,5 +57,7 @@ export interface DungeonDef {
   resetDays?: number;
   /** Raid progression tier (1: Molten Core, Onyxia, Zul'Gurub, Ruins; 2: Blackwing Lair; 3: Temple; 4: Naxxramas). */
   tier?: number;
+  /** Attunement: clear this dungeon once, or complete this quest, or reach this reputation [faction, rank]. */
+  attune?: { dungeon?: number; quest?: number; rep?: [number, number]; text: string };
   encounters: Encounter[];
 }
