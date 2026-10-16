@@ -160,8 +160,9 @@ export function createServer({ db, world, gameDataJson, clock = Date.now, launch
             : msg.op === 'fill' ? world.fillRequest(acct.accountId, msg.request, msg.count)
             : msg.op === 'cancel' ? world.cancelRequest(acct.accountId, msg.request) : { ok: false, error: 'Bad op.' });
         case 'group':
-          return reply(msg.op === 'create' ? world.createGroup(acct.accountId, msg.dungeon, msg.role)
-            : msg.op === 'join' ? world.joinGroup(acct.accountId, msg.group, msg.role)
+          return reply(msg.op === 'create' ? world.createGroup(acct.accountId, msg.dungeon, msg.role, msg.targets)
+            : msg.op === 'join' ? world.joinGroup(acct.accountId, msg.group, msg.role, msg.targets)
+            : msg.op === 'targets' ? world.setTargets(acct.accountId, msg.group, msg.targets)
             : msg.op === 'leave' || msg.op === 'cancel' ? world.leaveGroup(acct.accountId, msg.group)
             : msg.op === 'start' ? world.startGroup(acct.accountId, msg.group) : { ok: false, error: 'Bad op.' });
         case 'watch': {

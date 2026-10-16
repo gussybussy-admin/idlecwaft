@@ -84,6 +84,12 @@ CREATE TABLE IF NOT EXISTS dungeon_runs (
   result TEXT NOT NULL,
   delivered INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS raid_lockouts (
+  account_id INTEGER NOT NULL,
+  dungeon INTEGER NOT NULL,
+  until INTEGER NOT NULL,
+  PRIMARY KEY (account_id, dungeon)
+);
 CREATE TABLE IF NOT EXISTS chat (
   id INTEGER PRIMARY KEY,
   t INTEGER NOT NULL,

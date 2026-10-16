@@ -8,6 +8,10 @@ import type { AbilityEffect, CreatureAbility, CreatureDef, DungeonDef, Encounter
 import type { Client } from '../client.js';
 import type { ZoneLookup } from './zone-lookup.js';
 import { PATCH_1_12, type Row, type VMangos } from './vmangos.js';
+import { NOT_BOSSES, RAIDS, RAID_MECHANICS, raidAbilities } from './raid-mechanics.js';
+
+/** Raid lockouts reset every three days (the guild's choice; vanilla had weekly and 3/5-day resets). */
+const RAID_RESET_DAYS = 3;
 
 /** Instances with several runs: each wing's name, LFG entry, final boss, group size. */
 /** Instances with several runs: each wing's name, LFG entry, final boss, landmark bosses that mark its area, group size. */
@@ -48,13 +52,18 @@ export interface DungeonInputs {
   items: Set<number>;
 }
 
+/** SpellDuration.dbc: duration index -> ms (DoT lengths). Loaded when dungeons are built. */
+let spellDurations = new Map<number, number>();
+
 export function buildDungeons(client: Client, vm: VMangos, zl: ZoneLookup, inp: DungeonInputs): Record<number, DungeonDef> {
+  const sd = client.dbc('SpellDuration');
+  spellDurations = new Map(sd.rows().map(r => [sd.u32(r, 0), sd.i32(r, 1)]));
   const map = client.dbc('Map'); // 0 id, 2 instance type (1 party), 4 name
   const mapByName = new Map<string, number>();
   for (const r of map.rows()) if (map.u32(r, 2) === 1) mapByName.set(map.str(r, 4), map.u32(r, 0));
   const lfg = client.dbc('LFGDungeons'); // 1 name, 10 min, 11 max, 12 type (1 dungeon, 2 raid)
   const lfgById = new Map<number, { name: string; min: number; max: number }>();
-  const runs: { map: number; name: string; min: number; max: number; size: number; anchor?: string; lfg: number }[] = [];
+  const runs: { map: number; name: string; min: number; max: number; size: number; anchor?: string; lfg: number; raid?: boolean; tier?: number; extra?: string[]; beforeFinal?: string[]; order?: string[] }[] = [];
   for (const r of lfg.rows()) {
     const type = lfg.u32(r, 12), id = lfg.u32(r, 0), name = lfg.str(r, 1);
     lfgById.set(id, { name, min: lfg.u32(r, 10), max: lfg.u32(r, 11) });
@@ -71,6 +80,10 @@ export function buildDungeons(client: Client, vm: VMangos, zl: ZoneLookup, inp: 
       runs.push({ map: +mapId, name: w.name, min, max, size: w.size ?? 5, anchor: w.anchor, lfg: (w.lfg ?? 17) * 100 + i });
     });
   }
+
+  // Raids (Map.dbc instance type 2), level 60.
+  const mapName = new Map(map.rows().map(r => [map.u32(r, 0), map.str(r, 4)]));
+  for (const r of RAIDS) runs.push({ map: r.map, name: mapName.get(r.map) ?? `Raid ${r.map}`, min: 60, max: 60, size: r.size, anchor: r.anchor, lfg: 9000 + r.map, raid: true, tier: r.tier, extra: r.extra, beforeFinal: r.beforeFinal, order: r.order });
 
   // The world zone each instance's portal stands in.
   const portalZone = new Map<number, number>();
@@ -96,7 +109,8 @@ export function buildDungeons(client: Client, vm: VMangos, zl: ZoneLookup, inp: 
     if (!t || (Number(t.npc_flags) & ~3) || Number(t.type) === CREATURE_TYPE_CRITTER) return null;
     const def = inp.creatureDef(t);
     if (!def || def.hostile.length === 0) return null;
-    def.abilities = abilities(vm, t);
+    // Raid bosses are scripted: their abilities come from the curated mechanics table.
+    def.abilities = RAID_MECHANICS[String(t.name)] ? raidAbilities(vm, String(t.name), spellEffects) : abilities(vm, t);
     inp.creatures[entry] = def;
     return def;
   };
@@ -109,6 +123,8 @@ export function buildDungeons(client: Client, vm: VMangos, zl: ZoneLookup, inp: 
   const isBoss = (def: CreatureDef, spawns: number) => {
     if (spawns !== 1 || def.rank === 0) return false;
     if (def.rank === 2 || def.rank === 4) return true;
+    if (NOT_BOSSES.has(def.name)) return false;
+    if (def.rank === 3 && (def.loot || template(def.id)?.script_name)) return true; // world bosses (raids)
     const script = String(template(def.id)?.script_name ?? '');
     if (script && /^(boss_|npc_)/.test(script) && def.loot) return true;
     if (!def.loot) return false;
@@ -167,6 +183,11 @@ export function buildDungeons(client: Client, vm: VMangos, zl: ZoneLookup, inp: 
       : bosses.reduce((a, b) => (template(b.entry)!.level_max as number) > (template(a.entry)!.level_max as number) ? b : a);
     const start = [...trash, ...bosses].reduce((a, b) => (dist(b, finalBoss) > dist(a, finalBoss) ? b : a));
     bosses.sort((a, b) => (a === finalBoss ? 1 : b === finalBoss ? -1 : dist(start, a) - dist(start, b)));
+    // Raids follow their known order (their layouts are too big for "nearest first").
+    if (run.order) {
+      const rank = (b: Spawn) => { const i = run.order!.indexOf(String(template(b.entry)?.name)); return i < 0 ? run.order!.length : i; };
+      bosses.sort((a, b) => rank(a) - rank(b));
+    }
     // Trash packs, each assigned to the next boss it guards.
     const packs = cluster(trash);
     const encounters: Encounter[] = [];
@@ -177,9 +198,24 @@ export function buildDungeons(client: Client, vm: VMangos, zl: ZoneLookup, inp: 
       for (const p of pickEvenly(mine, PACKS_PER_BOSS)) encounters.push({ mobs: tally(p.members.slice(0, 4)) });
       encounters.push({ boss: b.entry, mobs: [[b.entry, 1]] });
     });
+    // Bosses that only appear through events: some come just before the final boss (Sapphiron, Ouro),
+    // others end the raid (Majordomo and Ragnaros, Nefarian).
+    const byName = (name: string) => {
+      const t = vm.get(`SELECT entry FROM creature_template WHERE name = ? AND patch <= ? ORDER BY patch DESC LIMIT 1`, name, PATCH_1_12);
+      return t ? fightable(Number(t.entry)) : null;
+    };
+    for (const name of run.beforeFinal ?? []) {
+      const def = byName(name);
+      if (def) encounters.splice(encounters.length - 1, 0, { boss: def.id, mobs: [[def.id, 1]] });
+    }
+    for (const name of run.extra ?? []) {
+      const def = byName(name);
+      if (def) encounters.push({ boss: def.id, mobs: [[def.id, 1]] });
+    }
     out[run.lfg] = {
       id: run.lfg, name: run.name, map: run.map, zone: portalZone.get(run.map) ?? null,
       minLevel: run.min, maxLevel: run.max, size: run.size, encounters,
+      ...(run.raid ? { raid: true, resetDays: RAID_RESET_DAYS, tier: run.tier } : {}),
     };
   }
   return out;
@@ -254,7 +290,7 @@ function abilities(vm: VMangos, t: Row): CreatureAbility[] | undefined {
   return out.length ? out : undefined;
 }
 
-function spellEffects(s: Row): AbilityEffect[] {
+export function spellEffects(s: Row): AbilityEffect[] {
   const n = (k: string) => Number(s[k] ?? 0);
   const out: AbilityEffect[] = [];
   const school = n('school');
@@ -269,7 +305,11 @@ function spellEffects(s: Row): AbilityEffect[] {
       case SPELL_EFFECT.SUMMON: if (n(`effectMiscValue${e}`)) out.push({ k: 'summon', creature: n(`effectMiscValue${e}`), count: Math.max(1, bp + 1) }); break;
       case SPELL_EFFECT.KNOCK_BACK: out.push({ k: 'knockback' }); break;
       case SPELL_EFFECT.APPLY_AURA:
-        if (aura === AURA.PERIODIC_DAMAGE) out.push({ k: 'dot', school, perTick: bp + 1, ticks: 5, ampMs: n(`effectAmplitude${e}`) || 3000 });
+        if (aura === AURA.PERIODIC_DAMAGE) {
+          const ampMs = n(`effectAmplitude${e}`) || 3000;
+          const duration = spellDurations.get(n('durationIndex')) ?? ampMs * 5;
+          out.push({ k: 'dot', school, perTick: bp + 1, ticks: Math.max(1, Math.round(Math.max(ampMs, duration) / ampMs)), ampMs });
+        }
         else if (aura === AURA.STUN || aura === AURA.FEAR || aura === AURA.CONFUSE) out.push({ k: 'cc', ms: 4000 });
         else if ((aura === AURA.MOD_DAMAGE_DONE || aura === AURA.MELEE_HASTE) && bp + 1 > 0) out.push({ k: 'enrage', pct: Math.min(150, bp + 1) });
         break;

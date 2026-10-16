@@ -203,14 +203,19 @@ export class Game {
   orderOp(op: 'claim' | 'deliver' | 'cancel', order: number): Promise<boolean> {
     return this.request({ t: 'order', id: this.nextId++, op, order });
   }
-  groupOp(op: 'create', dungeon: number, role: Role): Promise<boolean>;
-  groupOp(op: 'join', group: number, role: Role): Promise<boolean>;
+  groupOp(op: 'create', dungeon: number, role: Role, targets?: number[]): Promise<boolean>;
+  groupOp(op: 'join', group: number, role: Role, targets?: number[]): Promise<boolean>;
   groupOp(op: 'leave' | 'start' | 'cancel', group: number): Promise<boolean>;
-  groupOp(op: 'create' | 'join' | 'leave' | 'start' | 'cancel', target: number, role?: Role): Promise<boolean> {
+  groupOp(op: 'create' | 'join' | 'leave' | 'start' | 'cancel', target: number, role?: Role, targets?: number[]): Promise<boolean> {
     const id = this.nextId++;
-    if (op === 'create') return this.request({ t: 'group', id, op, dungeon: target, role: role! });
-    if (op === 'join') return this.request({ t: 'group', id, op, group: target, role: role! });
+    const t = targets?.length ? { targets } : {};
+    if (op === 'create') return this.request({ t: 'group', id, op, dungeon: target, role: role!, ...t });
+    if (op === 'join') return this.request({ t: 'group', id, op, group: target, role: role!, ...t });
     return this.request({ t: 'group', id, op, group: target });
+  }
+  /** Set your loot targets in a forming group (up to two items). */
+  groupTargets(group: number, targets: number[]): Promise<boolean> {
+    return this.request({ t: 'group', id: this.nextId++, op: 'targets', group, targets });
   }
   /** Tell the server which run we're watching (null to stop). */
   watch(run: number | null): void { this.send({ t: 'watch', run }); }

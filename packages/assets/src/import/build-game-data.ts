@@ -22,7 +22,9 @@ const NPC_FLAG_VENDOR = 0x4;
 const CREATURE_TYPE_CRITTER = 8, CREATURE_TYPE_NOT_SPECIFIED = 10;
 // Food / drink auras: MOD_REGEN / MOD_POWER_REGEN restore (basePoints + 1) every 5 seconds.
 const AURA_MOD_REGEN = 84, AURA_MOD_POWER_REGEN = 85, REGEN_TICK_MS = 5000;
-const AURA_PERIODIC_HEAL = 8, EFFECT_HEAL = 10, EFFECT_ENERGIZE = 30;
+const AURA_PERIODIC_HEAL = 8, EFFECT_HEAL = 10, EFFECT_ENERGIZE = 30, EFFECT_APPLY_AURA = 6;
+const AURA_MOD_STAT = 29, AURA_MOD_MAX_HEALTH = 34, AURA_MOD_RESISTANCE = 22, AURA_MOD_ATTACK_POWER = 99, AURA_SCHOOL_ABSORB = 69;
+const STAT_ITEM: Record<number, number> = { 0: 4, 1: 3, 2: 7, 3: 5, 4: 6 }; // aura stat index -> item stat id (str agi sta int spi)
 // Profession tools: skinning knife, blacksmith hammer, arclight spanner, and the runed enchanting rods.
 const TOOLS = [2901, 6256, 7005, 5956, 6219, 6218, 6339, 11130, 11145, 16207];
 
@@ -419,8 +421,25 @@ function itemDef(t: Row, icons: Map<number, string>, vm: VMangos, durations: Map
     if (s) {
       const durationMs = durations.get(Number(s.durationIndex)) ?? 0;
       let heal = 0, mana = 0, potHeal = 0, potMana = 0;
+      const buff = { stats: [] as [number, number][], hp: 0, armor: 0, ap: 0, resist: [0, 0, 0, 0, 0, 0, 0] };
+      let protect: { school: number; amount: number } | null = null;
       for (let e = 1; e <= 3; e++) {
         const effect = Number(s[`effect${e}`]), aura = Number(s[`effectApplyAuraName${e}`]);
+        const misc = Number(s[`effectMiscValue${e}`]);
+        // Elixirs and flasks (raid consumables): stats, health, armor/resistances, attack power.
+        if (effect === EFFECT_APPLY_AURA && def.class === 0 && durationMs >= 60_000 && !def.food) {
+          const v = Number(s[`effectBasePoints${e}`]) + 1;
+          if (aura === AURA_MOD_STAT && v > 0) { for (const st of misc === -1 ? [0, 1, 2, 3, 4] : [misc]) if (STAT_ITEM[st]) buff.stats.push([STAT_ITEM[st], v]); }
+          else if (aura === AURA_MOD_MAX_HEALTH && v > 0) buff.hp += v;
+          else if (aura === AURA_MOD_RESISTANCE && v > 0) { if (misc & 1) buff.armor += v; for (let sc = 1; sc <= 6; sc++) if (misc & (1 << sc)) buff.resist[sc] += v; }
+          else if (aura === AURA_MOD_ATTACK_POWER && v > 0) buff.ap += v;
+        }
+        // Protection potions: absorb one school's damage.
+        if (effect === EFFECT_APPLY_AURA && aura === AURA_SCHOOL_ABSORB && def.class === 0) {
+          const school = [1, 2, 3, 4, 5, 6].find(sc => misc === (1 << sc));
+          const avg = Number(s[`effectBasePoints${e}`]) + 1 + Math.max(0, Number(s[`effectDieSides${e}`]) - 1) / 2;
+          if (school) protect = { school, amount: Math.round(avg) };
+        }
         const bp = Number(s[`effectBasePoints${e}`]), avg = bp + 1 + Math.max(0, Number(s[`effectDieSides${e}`]) - 1) / 2;
         const total = Math.round((bp + 1) * durationMs / REGEN_TICK_MS);
         if (aura === AURA_MOD_REGEN) heal += total;
@@ -432,6 +451,8 @@ function itemDef(t: Row, icons: Map<number, string>, vm: VMangos, durations: Map
       }
       if (heal || mana) def.food = { heal, mana, durationMs };
       if ((potHeal || potMana) && def.class === 0) def.potion = { heal: potHeal, mana: potMana };
+      if (buff.stats.length || buff.hp || buff.armor || buff.ap || buff.resist.some(Boolean)) def.elixir = { ...buff, durationMs };
+      if (protect) def.protection = protect;
     }
   }
   if (def.id === 2901) def.tool = 'mining-pick';

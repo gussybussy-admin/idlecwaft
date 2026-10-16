@@ -17,6 +17,8 @@ export interface CreatureAbility {
   spell: number; name: string;
   /** Hits everyone near the target instead of one player. */
   aoe: boolean;
+  /** Only reaches those in melee range (tanks and melee damage dealers): cleaves, whirlwinds, stomps. */
+  melee?: boolean;
   /** Who it's cast at. */
   target: 'tank' | 'random' | 'self';
   /** First cast and repeat delay ranges, ms. */
@@ -33,7 +35,12 @@ export interface DungeonDef {
   /** The zone the instance portal is in (for display). */
   zone: number | null;
   minLevel: number; maxLevel: number;
-  /** Players per group: 5, or 10 for Upper Blackrock Spire. */
+  /** Players per group: 5, 10 for Upper Blackrock Spire, 20 or 40 for raids. */
   size: number;
+  /** Raids: level 60, a lockout that resets every `resetDays`, and wish-list loot. */
+  raid?: boolean;
+  resetDays?: number;
+  /** Raid progression tier (1: Molten Core, Onyxia, Zul'Gurub, Ruins; 2: Blackwing Lair; 3: Temple; 4: Naxxramas). */
+  tier?: number;
   encounters: Encounter[];
 }

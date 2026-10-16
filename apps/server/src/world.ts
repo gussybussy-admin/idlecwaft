@@ -3,7 +3,7 @@
 import {
   addItem, advance, applyCommand, emptySummary, hasItem, migrateState, newGame, OFFLINE_CAP_MS, SKILL_NAME, summarize,
   type Appearance, type BankLogEntry, type ChatMessage, type Command, type CommandResult, type FeedItem,
-  applyRunRewards, factionOfRace, hireling, ROLE_CLASSES, ROLES, simulateRun, snapshotOf,
+  applyRunRewards, dungeonLoot, factionOfRace, groupRoles, MAX_TARGETS, nextReset, hireling, ROLE_CLASSES, ROLES, simulateRun, snapshotOf,
   type CraftOrder, type DungeonGroup, type GroupMember, type Role, type RunResult, type RunSummary, type Snapshot, type GameData, type GameState, type GuildRequest, type GuildSnapshot, type RosterEntry, type SimEvent, type Summary,
 } from '@idle/sim';
 import type { DB } from './db.js';
@@ -433,29 +433,49 @@ export class World {
     if (!ROLE_CLASSES[role as Role].includes(c.state.char.cls)) return `${this.data.classes.find(x => x.id === c.state.char.cls)?.name ?? 'Your class'}s can't ${role === 'tank' ? 'tank' : 'heal'}.`;
     if (c.state.char.level < d.minLevel) return `Requires level ${d.minLevel}.`;
     if (c.state.action?.kind === 'dungeon') return "You're already in a dungeon.";
+    const locked = this.lockedUntil(c.accountId, dungeon);
+    if (locked) return `You're saved to ${d.name} until it resets (${new Date(locked).toUTCString().slice(0, 22)} UTC).`;
     const open = (this.db.prepare(`SELECT members FROM dungeon_groups WHERE status = 'open'`).all() as { members: string }[])
       .some(g => (JSON.parse(g.members) as GroupMember[]).some(m => m.accountId === c.accountId));
     if (open) return "You're already signed up for a group.";
     return null;
   }
 
-  private member(c: Char, role: Role): GroupMember {
-    return { accountId: c.accountId, name: c.name, role, level: c.state.char.level, cls: c.state.char.cls };
+  /** When this character's raid lockout ends (0: not saved). */
+  private lockedUntil(accountId: number, dungeon: number): number {
+    const r = this.db.prepare(`SELECT until FROM raid_lockouts WHERE account_id = ? AND dungeon = ?`).get(accountId, dungeon) as { until: number } | undefined;
+    return r && r.until > this.clock() ? r.until : 0;
   }
 
-  createGroup(accountId: number, dungeon: unknown, role: unknown): Result {
+  /** Valid loot targets: at most two distinct items that a boss of this dungeon drops. */
+  private cleanTargets(dungeon: number, targets: unknown): number[] | string {
+    if (targets == null) return [];
+    if (!Array.isArray(targets) || targets.length > MAX_TARGETS || !targets.every(t => isInt(t, 1, 1e9))) return `Pick up to ${MAX_TARGETS} items.`;
+    const d = this.data.dungeons[dungeon];
+    const drops = new Set([...dungeonLoot(this.data, d).values()].flat());
+    if (!targets.every(t => drops.has(t))) return `That item doesn't drop in ${d.name}.`;
+    return [...new Set(targets as number[])];
+  }
+
+  private member(c: Char, role: Role, targets: number[]): GroupMember {
+    return { accountId: c.accountId, name: c.name, role, level: c.state.char.level, cls: c.state.char.cls, ...(targets.length ? { targets } : {}) };
+  }
+
+  createGroup(accountId: number, dungeon: unknown, role: unknown, targets?: unknown): Result {
     const c = this.chars.get(accountId);
     if (!c) return fail('No character.');
     if (!isInt(dungeon, 1, 1e9)) return fail('Unknown dungeon.');
     const err = this.signUpError(c, dungeon, role);
     if (err) return fail(err);
+    const t = this.cleanTargets(dungeon, targets);
+    if (typeof t === 'string') return fail(t);
     this.db.prepare(`INSERT INTO dungeon_groups (t, leader_id, dungeon, members) VALUES (?, ?, ?, ?)`)
-      .run(this.clock(), accountId, dungeon, JSON.stringify([this.member(c, role as Role)]));
+      .run(this.clock(), accountId, dungeon, JSON.stringify([this.member(c, role as Role, t)]));
     this.emit('guild');
     return OK;
   }
 
-  joinGroup(accountId: number, groupId: unknown, role: unknown): Result {
+  joinGroup(accountId: number, groupId: unknown, role: unknown, targets?: unknown): Result {
     const c = this.chars.get(accountId);
     const g = this.group(groupId);
     if (!c) return fail('No character.');
@@ -464,7 +484,24 @@ export class World {
     if (err) return fail(err);
     const members = JSON.parse(g.members) as GroupMember[];
     if (members.length >= (this.data.dungeons[g.dungeon]?.size ?? 5)) return fail('That group is full.');
-    members.push(this.member(c, role as Role));
+    const t = this.cleanTargets(g.dungeon, targets);
+    if (typeof t === 'string') return fail(t);
+    members.push(this.member(c, role as Role, t));
+    this.db.prepare(`UPDATE dungeon_groups SET members = ? WHERE id = ?`).run(JSON.stringify(members), g.id);
+    this.emit('guild');
+    return OK;
+  }
+
+  /** Change your loot targets while the group is still forming. */
+  setTargets(accountId: number, groupId: unknown, targets: unknown): Result {
+    const g = this.group(groupId);
+    if (!g || g.status !== 'open') return fail('That group is no longer forming.');
+    const members = JSON.parse(g.members) as GroupMember[];
+    const m = members.find(x => x.accountId === accountId);
+    if (!m) return fail("You're not in that group.");
+    const t = this.cleanTargets(g.dungeon, targets);
+    if (typeof t === 'string') return fail(t);
+    if (t.length) m.targets = t; else delete m.targets;
     this.db.prepare(`UPDATE dungeon_groups SET members = ? WHERE id = ?`).run(JSON.stringify(members), g.id);
     this.emit('guild');
     return OK;
@@ -500,30 +537,35 @@ export class World {
       if (c.state.now < now) c.state.now = now; // paused beyond the offline window: resume now
       if (c.state.action?.kind === 'dungeon') return fail(`${m.name} is already in a dungeon.`);
       if (c.state.phase.p === 'dead') return fail(`${m.name} is dead.`);
+      if (d.raid && this.lockedUntil(c.accountId, g.dungeon)) return fail(`${m.name} is saved to ${d.name}.`);
       const target = Math.min(c.state.char.level, d.maxLevel);
-      snaps.push(snapshotOf(c.state, this.data, c.accountId, m.role, Math.max(d.minLevel, target)));
+      snaps.push(snapshotOf(c.state, this.data, c.accountId, m.role, Math.max(d.minLevel, target), { targets: m.targets, consumables: true }));
     }
     const level = Math.round(snaps.reduce((a, s) => a + s.level, 0) / snaps.length);
     const side = factionOfRace(this.data, this.chars.get(g.leader_id)!.state.char.race);
     const need: Role[] = [];
     const has = (r: Role) => snaps.filter(s => s.role === r).length + need.filter(x => x === r).length;
-    const tanks = d.size > 5 ? 2 : 1, healers = d.size > 5 ? 2 : 1;
+    const { tanks, healers } = groupRoles(d.size);
     while (has('tank') < tanks && snaps.length + need.length < d.size) need.push('tank');
     while (has('healer') < healers && snaps.length + need.length < d.size) need.push('healer');
     while (snaps.length + need.length < d.size) need.push('dps');
-    need.forEach((r, i) => snaps.push(hireling(this.data, r, level, side, i)));
+    need.forEach((r, i) => snaps.push(hireling(this.data, r, level, side, i, d.tier ?? 0)));
     const result = simulateRun(this.data, d, snaps, seed >>> 0);
     const ends = now + result.durationMs;
     this.db.transaction(() => {
       const runId = Number(this.db.prepare(`INSERT INTO dungeon_runs (group_id, dungeon, started, ends, snapshots, result) VALUES (?, ?, ?, ?, ?, ?)`)
         .run(g.id, g.dungeon, now, ends, JSON.stringify(snaps), JSON.stringify(result)).lastInsertRowid);
       this.db.prepare(`UPDATE dungeon_groups SET status = 'running', run_id = ? WHERE id = ?`).run(runId, g.id);
-      for (const m of members) {
+      members.forEach((m, i) => {
         const c = this.chars.get(m.accountId)!;
+        // Elixirs are drunk as the run starts (potions are counted when it ends, as they were used).
+        for (const e of snaps[i].elixirs ?? []) addItem(c.state, e, -1);
+        // Entering a raid saves you to it until its next reset.
+        if (d.raid) this.db.prepare(`INSERT OR REPLACE INTO raid_lockouts (account_id, dungeon, until) VALUES (?, ?, ?)`).run(m.accountId, g.dungeon, nextReset(d, now));
         c.state.action = { kind: 'dungeon', run: runId, dungeon: g.dungeon, until: ends };
         c.state.phase = { p: 'work', from: now, until: ends };
         this.persist(c);
-      }
+      });
     })();
     for (const m of members) this.emit('state', m.accountId);
     this.addFeed(accountId, 'dungeon', `${this.chars.get(accountId)!.name}'s group entered ${d.name}. Watch them live on the Dungeons page!`, now);
@@ -648,6 +690,8 @@ export class World {
         { id: number; t: number; account_id: number; item: number; count: number; filled: number; note: string; open: number }[])
         .map((r): GuildRequest => ({ id: r.id, t: r.t, who: nameOf(r.account_id), accountId: r.account_id, item: r.item, count: r.count, filled: r.filled, note: r.note, open: !!r.open })),
       groups: this.groupsSnapshot(nameOf),
+      lockouts: (this.db.prepare(`SELECT * FROM raid_lockouts WHERE until > ?`).all(this.clock()) as { account_id: number; dungeon: number; until: number }[])
+        .map(r => ({ accountId: r.account_id, name: nameOf(r.account_id), dungeon: r.dungeon, until: r.until })),
       orders: (this.db.prepare(`SELECT * FROM craft_orders WHERE open = 1 OR t > ? ORDER BY open DESC, id DESC LIMIT 40`).all(this.clock() - 3 * 86_400_000) as OrderRow[])
         .map((r): CraftOrder => ({
           id: r.id, t: r.t, who: nameOf(r.account_id), accountId: r.account_id, recipe: r.recipe, count: r.count,

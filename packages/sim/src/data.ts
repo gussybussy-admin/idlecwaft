@@ -55,6 +55,10 @@ export interface ItemDef {
   block?: number;
   /** Reputation rank (index into REP_RANKS) needed with a faction to buy it. */
   reqRep?: [number, number];
+  /** Elixirs and flasks: what they add for a dungeon or raid run (stats like ItemDef.stats, resistances by school). */
+  elixir?: { stats: [number, number][]; hp: number; armor: number; ap: number; resist: number[]; durationMs: number };
+  /** Protection potions: absorb this much damage of one school (1 holy .. 6 arcane). */
+  protection?: { school: number; amount: number };
   /** Instant-use potion: health and mana restored (average). Used automatically in fights when low. */
   potion?: { heal: number; mana: number };
 }

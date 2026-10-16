@@ -58,7 +58,9 @@ export class GroupDiorama {
       const built = m.look ? await buildCharacter({ ...m.look, bake: null, geosets: {}, gear: m.gear }) : null;
       if (this.disposed) return;
       const actor = built ? this.actor(built.root, built.animations, built.durations) : this.placeholder(0x2a3a5a);
-      actor.root.position.copy(this.spot(i, members.length, PARTY_X));
+      // Raids (more than five on stage) stand in two rows: the first members (tanks, healers) in front.
+      const cols = members.length > 5 ? Math.ceil(members.length / 2) : members.length;
+      actor.root.position.copy(this.spot(i % cols, cols, PARTY_X - Math.floor(i / cols) * 1.6));
       actor.root.rotation.y = 0; // face the mobs (+x)
       this.scene.add(actor.root);
       this.party[i] = actor;
@@ -151,8 +153,9 @@ export class GroupDiorama {
   reviveParty() { for (const a of this.party) if (a) { a.dead = false; this.play(a, a.base, true); } }
 
   /** Screen position above an actor (for floating numbers). */
-  screenPos(who: number, mob: boolean): { x: number; y: number } {
+  screenPos(who: number, mob: boolean): { x: number; y: number } | null {
     const a = this.get(who, mob);
+    if (!a && !mob && who < 0) return null; // not on stage (raids show only some of the members)
     const p = a ? a.root.position.clone() : new THREE.Vector3(mob ? MOB_X : PARTY_X, 0, 0);
     p.y += 2.1;
     const v = p.project(this.camera);

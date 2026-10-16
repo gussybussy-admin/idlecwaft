@@ -35,6 +35,8 @@ Living document for the core systems. Sections marked *TBD* get filled in as eac
 | Dungeon groups | **NPC hirelings fill empty slots** (weaker than geared players), so two friends can run a 5-man (Phase 5). |
 | Dungeon loot | **Need before greed**: members who can use an item roll Need and beat Greed rolls; hirelings never roll (Phase 5). |
 | Dungeon time | **Characters are busy for the run** (its simulated length, tens of minutes), then the rewards arrive (Phase 5). |
+| Raid loot | **Targets**: each member picks up to two items from the raid's loot; a targeted drop goes to whoever targeted it (a roll among them, one per target per run); everything else is need-before-greed (Phase 6). |
+| Raid lockouts | **All raids reset every 3 days** (09:00 UTC); entering a raid saves you to it until then (Phase 6). |
 
 ## Client data (Phase 0 recon, build 5875 enUS)
 
@@ -336,8 +338,58 @@ From playing Phase 4 with the guild:
   sex), shoulders, weapons and shields are attached to the character's M2 attachment points.
   Item art and game-object models convert on demand (`items/`, `objects/` in the cache).
 
+## Raids (Phase 6)
+
+**Raids from data, mechanics curated.** The seven level-60 raids (Molten Core, Onyxia's Lair,
+Zul'Gurub, Ruins and Temple of Ahn'Qiraj, Blackwing Lair, Naxxramas) use the dungeon importer with a
+small table per raid (`raid-mechanics.ts`): size (20 or 40), progression tier (1: MC, Onyxia, ZG,
+AQ20; 2: BWL; 3: AQ40; 4: Naxx), the anchor boss, bosses only reached through scripts (Majordomo,
+Ragnaros, Nefarian), and the known boss order (raid layouts are too big for "nearest first").
+Raid bosses are mostly scripted rather than in creature_spells, so their signature mechanics are
+listed by spell name, target (tank, random member, everyone, or only those in melee range) and timer,
+and the numbers come from the client's spell data (the median creature version of that spell, capped at
+6000 per hit, with a hand-set fallback where the spell has no usable damage, like Onyxia's Deep Breath).
+Melee-range abilities (Ragnaros's Wrath, Shazzrah's Arcane Explosion, whirlwinds and stomps) hit tanks
+and melee damage dealers (warriors, paladins, rogues) only.
+
+**Countering mechanics.** Resistance gear reduces spell damage by school (as in Phase 5).
+Consumables come from the members' bags at the start: the two best elixirs/flasks for the role are
+drunk (taken at the start, counted into the snapshot), and up to five healing potions and five of
+each protection potion are packed. Protection potions absorb their school before each boss that deals
+it; healing potions are drunk below 35% health (2-minute cooldown). Potions are taken from the bags when
+the run ends, as many as were used. Hired raid tanks carry two of the best protection potion of each
+school.
+
+**Raid groups.** 40-player raids run 4 tanks and 10 healers, 20-player raids 2 and 5. Every tank
+holds its own share of the mobs (the first holds the boss); tank healers keep the tanks up while the rest
+heal the raid, accounting for heals already on their way. Groups of ten or more get raid buffs
+(+20% damage, +12% health, armor, +20 resistances, +10% mana and healing). Hired raiders are seasoned:
+125% power, and from tier 2 on they wear the epics of the tiers below. Tanks parry (10% plus
+Defense) and block with a shield (15% plus Defense, by its block value). Enrage is an 8-second burst
+(at most 150%); damage-over-time effects last their real duration.
+
+**Lockouts and loot targets.** Entering a raid saves every member to it until the next reset (every 3
+days at 09:00 UTC); a saved character can't sign up again, and the guild sees who's saved where. When
+signing up, each member can target up to two items from the raid's loot (rares and epics, by boss); a
+targeted drop goes to whoever targeted it (a roll among them), each target filled once per run. Other
+drops fall back to need-before-greed.
+
+**Client.** A Raids section shows each raid's tier, size, bosses, reset timer and who's saved; forming
+or joining a raid opens the target picker (searchable, by boss), and targets can be changed while
+forming. Raid groups show a compact roster with role counts and each member's targets. The replay puts
+ten members on stage in two rows (tanks and healers in front) and shows the whole raid as a 5-column
+raid frame.
+
+Balance (a hireling raid at level 60, dev/dungeon-balance.ts, 2 seeds each): tier 1 is clearable —
+Molten Core, Zul'Gurub and the Ruins clear every time, Onyxia about half the time. Blackwing Lair
+gets about a quarter of the way, the Temple about half (Viscidus and later), Naxxramas barely starts:
+those need players in real raid gear, resistances and consumables. Hired damage dealers are all mages.
+
 ### Known gaps
 
+- Raid bosses are plain fights plus their signature abilities: phases, adds, positioning (Ragnaros's
+  submerge, Nefarian's class calls, C'Thun's tentacles, Four Horsemen rotations) aren't simulated.
+- Raid attunements and the reputation turn-ins (Zandalar, Cenarion Circle, Brood of Nozdormu) aren't in.
 - Bosses that only appear through scripted events (Timmy the Cruel, Fras Siabi, Gahz'rilla) aren't in
   runs, and scripted encounters (VanCleef's adds, Balnazzar's transformation) are plain fights.
 - Lockpicking, pets (hunter/warlock), totems, poisons/imbues and crowd control aren't idleized yet;

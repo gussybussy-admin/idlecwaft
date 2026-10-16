@@ -3,7 +3,7 @@ import {
   advance, buy, catchUp, equip, gatherColor, grayLevel, killXp, newGame, OFFLINE_CAP_MS, planTravel, playerStats,
   rollLoot, RUN_SPEED, seedRng, sell, startAction, stopAction, train, trainRiding, trainSpells, knownSpells,
   learnTalent, pointsSpent, modded, activeTalentEffects, resetTalents, resetCost,
-  disenchant, unlearnProfession, itemCategory, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
+  disenchant, unlearnProfession, itemCategory, dungeonLoot, nextReset, withRaidBuffs, groupRoles, simulateRun, snapshotOf, measureDps, canUse, type Role, type RunResult, type Snapshot, acceptQuest, abandonQuest, completeQuest, questComplete, availableQuests, standing, repRank, migrateState, applyCommand, parseCommand,
   type GameState, type SimEvent,
 } from '../src/index.js';
 import { fixture } from './fixture.js';
@@ -640,5 +640,32 @@ describe('dungeons: the group simulation', () => {
       .filter(e => e.k === 'hit' && e.mob && e.spell === 999).reduce((a, e) => a + (e as { amt: number }).amt, 0);
     const resisted = g.map(sn => ({ ...sn, resist: [0, 0, 60, 0, 0, 0, 0] }));
     expect(taken(resisted)).toBeLessThan(taken(g));
+  });
+});
+
+describe('raids', () => {
+  const data = fixture();
+  const d = data.dungeons[1];
+  it('reset every three days at a fixed time, so a lockout never lasts longer than that', () => {
+    const raid = { ...d, raid: true, resetDays: 3 };
+    const now = 1_700_000_000_000;
+    const r = nextReset(raid, now);
+    expect(r).toBeGreaterThan(now);
+    expect(r - now).toBeLessThanOrEqual(3 * 86_400_000);
+    expect(nextReset(raid, r)).toBe(r + 3 * 86_400_000);
+    expect(nextReset(raid, r - 1)).toBe(r);
+  });
+  it('list boss loot to target, best first; raids only rares and epics', () => {
+    expect(dungeonLoot(data, d).get(103)).toEqual([12]); // the quality 1 bracers are left out
+    expect(dungeonLoot(data, { ...d, id: 77, raid: true }).get(103)).toEqual([]);
+  });
+  it('bring raid buffs to groups of ten or more, and size the roles to the raid', () => {
+    const snap = { maxHp: 1000, dps: 100, armor: 0, resist: [0, 0, 0, 0, 0, 0, 0], maxMana: 1000, heals: [] } as unknown as Snapshot;
+    expect(withRaidBuffs(Array(5).fill(snap))[0]).toBe(snap);
+    const buffed = withRaidBuffs(Array(10).fill(snap))[0];
+    expect(buffed.dps).toBeGreaterThan(100);
+    expect(buffed.maxHp).toBeGreaterThan(1000);
+    expect(groupRoles(40)).toEqual({ tanks: 4, healers: 10 });
+    expect(groupRoles(20)).toEqual({ tanks: 2, healers: 5 });
   });
 });

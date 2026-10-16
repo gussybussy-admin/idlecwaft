@@ -184,6 +184,49 @@ describe('dungeons', () => {
     expect(replay.run.events.length).toBeGreaterThan(10);
     expect(replay.snapshots).toHaveLength(5);
   });
+
+  it('raids: loot targets, consumables from the bags, and a lockout until the next reset', () => {
+    const raid = fixture();
+    raid.dungeons[1] = { ...raid.dungeons[1], name: 'Test Lair', size: 10, raid: true, resetDays: 3, tier: 1 };
+    raid.items[12] = { ...raid.items[12], quality: 3 }; // raids list rares and epics to target
+    raid.items[24] = { ...raid.items[22], id: 24, name: 'Test Elixir', potion: undefined,
+      elixir: { stats: [[7, 10]], hp: 0, armor: 0, ap: 0, resist: [0, 0, 0, 0, 0, 0, 0], durationMs: 3_600_000 } };
+    const { world, account, clock } = setup(raid);
+    const lead = account('lena');
+    const st = world.stateOf(lead)!;
+    st.char.level = 12;
+    st.spells = (raid.classSpells[st.char.cls] ?? []).map(o => o.spell);
+    st.inventory[24] = 3;
+    st.inventory[22] = 4;
+    expect(world.createGroup(lead, 1, 'tank', [1])).toEqual({ ok: false, error: "That item doesn't drop in Test Lair." });
+    expect(world.createGroup(lead, 1, 'tank', [12, 12, 12]).ok).toBe(false);
+    expect(world.createGroup(lead, 1, 'tank', [12]).ok).toBe(true);
+    const grp = world.guildSnapshot().groups[0];
+    expect(grp.members[0].targets).toEqual([12]);
+    expect(world.setTargets(lead, grp.id, []).ok).toBe(true);
+    expect(world.guildSnapshot().groups[0].members[0].targets).toBeUndefined();
+    expect(world.setTargets(lead, grp.id, [12]).ok).toBe(true);
+    expect(world.startGroup(lead, grp.id, 7).ok).toBe(true);
+    // The elixir is drunk as the run starts (one of them: only the two best distinct elixirs are used).
+    expect(world.stateOf(lead)!.inventory[24]).toBe(2);
+    const replay = world.replay(world.guildSnapshot().groups[0].run!.id)!;
+    expect(replay.snapshots[0].targets).toEqual([12]);
+    expect(replay.snapshots[0].elixirs).toEqual([24]);
+    expect(replay.snapshots).toHaveLength(10);
+    // A boss's targeted drop goes to the one who targeted it (hirelings never roll).
+    for (const l of replay.run.loot.filter(x => x.item === 12)) expect(l.winner).toBe(0);
+    const lock = world.guildSnapshot().lockouts;
+    expect(lock).toHaveLength(1);
+    expect(lock[0]).toMatchObject({ accountId: lead, dungeon: 1 });
+    expect(lock[0].until).toBeGreaterThan(clock.get());
+    expect(lock[0].until - clock.get()).toBeLessThanOrEqual(3 * 24 * H);
+    clock.add(replay.run.durationMs + 1000);
+    world.tick();
+    expect(world.createGroup(lead, 1, 'tank')).toMatchObject({ ok: false, error: expect.stringMatching(/saved to Test Lair/) });
+    clock.set(lock[0].until + 1);
+    expect(world.createGroup(lead, 1, 'tank').ok).toBe(true);
+    expect(world.guildSnapshot().lockouts).toHaveLength(0);
+  });
 });
 
 describe('chat and feed', () => {

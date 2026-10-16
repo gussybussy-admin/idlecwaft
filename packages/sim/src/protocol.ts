@@ -24,7 +24,13 @@ export interface CraftOrder {
   crafter: string | null; crafterId: number | null; open: boolean; delivered: boolean;
 }
 /** A dungeon group being formed, running, or finished. */
-export interface GroupMember { accountId: number; name: string; role: Role; level: number; cls: number }
+export interface GroupMember {
+  accountId: number; name: string; role: Role; level: number; cls: number;
+  /** Loot this member targets (up to two): if it drops, it goes to them. */
+  targets?: number[];
+}
+/** A character saved to a raid until its next reset. */
+export interface Lockout { accountId: number; name: string; dungeon: number; until: number }
 export interface RunSummary {
   id: number; started: number; ends: number; cleared: boolean; progress: number; total: number;
   members: { name: string; role: Role; hireling: boolean; cls: number }[];
@@ -41,7 +47,7 @@ export interface FeedItem { id: number; t: number; who: string; kind: 'level' | 
 
 export interface GuildSnapshot {
   name: string; gold: number;
-  roster: RosterEntry[]; bank: BankEntry[]; log: BankLogEntry[]; requests: GuildRequest[]; orders: CraftOrder[]; groups: DungeonGroup[];
+  roster: RosterEntry[]; bank: BankEntry[]; log: BankLogEntry[]; requests: GuildRequest[]; orders: CraftOrder[]; groups: DungeonGroup[]; lockouts: Lockout[];
   chat: ChatMessage[]; feed: FeedItem[];
 }
 
@@ -56,8 +62,9 @@ export type ClientMessage =
   | { t: 'request'; id: number; op: 'cancel'; request: number }
   | { t: 'order'; id: number; op: 'create'; recipe: number; count: number; provide: boolean; tip: number; note?: string }
   | { t: 'order'; id: number; op: 'claim' | 'deliver' | 'cancel'; order: number }
-  | { t: 'group'; id: number; op: 'create'; dungeon: number; role: Role }
-  | { t: 'group'; id: number; op: 'join'; group: number; role: Role }
+  | { t: 'group'; id: number; op: 'create'; dungeon: number; role: Role; targets?: number[] }
+  | { t: 'group'; id: number; op: 'join'; group: number; role: Role; targets?: number[] }
+  | { t: 'group'; id: number; op: 'targets'; group: number; targets: number[] }
   | { t: 'group'; id: number; op: 'leave' | 'start' | 'cancel'; group: number }
   | { t: 'replay'; id: number; run: number }
   /** Which run this connection is watching (null: none), so the guild sees who's watching live. */

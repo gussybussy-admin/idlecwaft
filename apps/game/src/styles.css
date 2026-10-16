@@ -261,3 +261,18 @@ input.text { background: #000; border: 1px solid var(--edge); border-radius: 4px
 .tag.live { color: #ff4040; border-color: #ff4040; font-weight: bold; }
 .modal.replay .panel-head { flex-wrap: wrap; row-gap: 6px; }
 .modal.replay { overflow-x: hidden; }
+
+/* raids */
+.roster-compact { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); column-gap: 8px; max-height: 180px; overflow-y: auto; }
+.modal.targets { width: min(640px, 100%); }
+.target-list { max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.target-item { cursor: pointer; border: 2px solid transparent; border-radius: 4px; display: inline-flex; }
+.target-item.on { border-color: var(--c-gold, #e6c34a); box-shadow: 0 0 6px rgba(230,195,74,0.6); }
+.raid-frames { display: grid; grid-template-columns: repeat(5, 74px); gap: 2px; align-content: start; }
+.raid-cell { position: relative; height: 16px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.12); font-size: 10px; line-height: 14px; overflow: hidden; white-space: nowrap; }
+.raid-cell .fill { position: absolute; inset: 0 auto 0 0; background: #2f8a3a; }
+.raid-cell.role-tank .fill { background: #8a6a2f; }
+.raid-cell.role-healer .fill { background: #2f6f8a; }
+.raid-cell.dead { opacity: 0.45; }
+.raid-cell span { position: relative; padding-left: 3px; text-shadow: 0 0 2px #000; }
+@media (max-width: 640px) { .raid-frames { grid-template-columns: repeat(4, 64px); } }
